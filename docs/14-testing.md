@@ -6,7 +6,7 @@
 
 ```mermaid
 graph LR
-    Setup["bash test/setup.sh"] --> Build["npm run build（TS 版）"]
+    Setup["bash test/setup.sh"] --> Build["python -m compileall mini_claude（Python 版）"]
     Build --> Test["逐项测试"]
     Test --> Cleanup["bash test/cleanup.sh"]
 
@@ -25,6 +25,8 @@ Coding Agent 的测试和普通软件不同——核心行为取决于 LLM 的�
 
 Claude Code 自身也采用类似策略：核心工具有单元测试，但 Agent 行为依赖人工 QA + 评估套件（eval suite）。
 
+手动测试不是低级替代品，而是在验证“系统行为”。例如模型有没有主动选择 `read_file`，不能只靠函数单元测试判断；Plan Mode 审批是否顺畅，也要真的在终端里走一遍。单元测试保证局部函数正确，场景测试保证多个模块连起来后还能工作。
+
 ## 准备
 
 ```bash
@@ -33,8 +35,8 @@ cd claude-code-from-scratch
 # 一键配置测试环境（MCP、Skills、CLAUDE.md、大文件、引号测试文件、自定义 Agent）
 bash test/setup.sh
 
-# 构建 TS 版（Python 版无需构建）
-npm run build
+# 构建 Python 版（Python 版无需构建）
+python -m compileall mini_claude
 ```
 
 确保 `.env` 已配置好 API Key：
@@ -48,13 +50,13 @@ ANTHROPIC_BASE_URL=https://aihubmix.com   # 可选
 
 ## 启动方式
 
-**TS 版**：
+**Python 版**：
 ```bash
 # 交互式 REPL（推荐，能测 skill、plan mode 和 REPL 命令）
-node dist/cli.js --yolo
+python -m mini_claude --yolo
 
 # one-shot 模式
-node dist/cli.js --yolo "你的提示词"
+python -m mini_claude --yolo "你的提示词"
 ```
 
 **Python 版**：
@@ -65,7 +67,9 @@ python -m mini_claude --yolo
 python -m mini_claude --yolo "你的提示词"
 ```
 
-> 以下测试步骤中的命令行示例以 TS 版为例，Python 版将 `node dist/cli.js` 替换为 `python -m mini_claude` 即可，功能完全一致。
+> 以下测试步骤中的命令行示例以 Python 版为例，Python 版将 `python -m mini_claude` 替换为 `python -m mini_claude` 即可，功能完全一致。
+
+测试时建议优先用交互式 REPL，因为很多能力依赖连续会话状态：记忆召回需要先保存再查询，Plan Mode 需要进入、写计划、退出审批，`--resume` 需要先有历史会话。one-shot 模式更适合验证单个工具或预算限制。
 
 ---
 
@@ -114,12 +118,12 @@ Fetch https://example.com and tell me what the page is about.
 **测试目标**：验证并发安全的工具可以同时执行（不是串行）。
 
 ```
-Read the files src/frontmatter.ts, src/session.ts, and src/skills.ts at the same time, then tell me each file's line count.
+Read the files mini_claude/frontmatter.py, mini_claude/session.py, and mini_claude/skills.py at the same time, then tell me each file's line count.
 ```
 
 Python 版可改为读取 Python 文件：
 ```
-Read the files python/mini_claude/frontmatter.py and python/mini_claude/session.py at the same time, then tell me each file's line count.
+Read the files mini_claude/frontmatter.py and mini_claude/session.py at the same time, then tell me each file's line count.
 ```
 
 ✅ 预期：多个 `read_file` 调用同时出现（不是一个一个来的）
@@ -152,17 +156,17 @@ Save these memories for me:
 > 给 prefetch 足够时间在第二轮 iteration 被注入。
 
 ```
-Read the file tsconfig.json, then tell me: where can I deploy to test my changes?
+Read the file pyproject.toml, then tell me: where can I deploy to test my changes?
 ```
 ✅ 预期：召回 staging server 记忆，回答 `https://staging.example.com`
 
 ```
-List the files in the src/ directory, then tell me: what's the deadline for the backend rewrite?
+List the files in the mini_claude package, then tell me: what's the deadline for the backend rewrite?
 ```
 ✅ 预期：召回 API migration 记忆，回答 `end of Q2 2025`
 
 ```
-Read package.json, then tell me: how should I write code for this project?
+Read pyproject.toml, then tell me: how should I write code for this project?
 ```
 ✅ 预期：召回 code style 记忆，提到 functional programming
 
@@ -191,7 +195,7 @@ Hello! Who are you?
 **测试目标**：验证编辑未读文件时的安全检查。
 
 ```
-Edit the file package.json and change the version to "9.9.9". Do NOT read it first.
+Edit the file pyproject.toml and change the version to "9.9.9". Do NOT read it first.
 ```
 
 ✅ 预期（两种可能都算通过）：
@@ -252,7 +256,7 @@ What does line 500 say?
 
 ---
 
-### 9. ToolSearch / 延迟加载工具
+### 9. `tool_search` / 延迟加载工具
 
 **测试目标**：验证 deferred tool 机制——plan mode 工具初始不发送 schema，搜索后才激活。
 
@@ -301,12 +305,12 @@ Use tool_search to find the "plan mode" tool.
 
 **explore agent**（只读搜索）：
 ```
-Use the agent tool with type "explore" to find all files that import from "./memory.js" in the src/ directory.
+Use the agent tool with type "explore" to find all files that import from ".memory" in the mini_claude package.
 ```
 
 ✅ 预期：
 - 输出显示 `[sub-agent:explore]` 标记
-- 返回引用 `memory.js` 的文件列表
+- 返回引用 `.memory` 的文件列表
 - 只使用 read_file / list_files / grep_search
 
 **plan agent**（结构化规划）：
@@ -342,11 +346,11 @@ Use the agent tool with type "general" to create a file called /tmp/mini-claude-
 
 **第二步：测试只读限制**
 ```
-Read package.json, then create a plan for changing the project name. Write your plan to the plan file.
+Read pyproject.toml, then create a plan for changing the project name. Write your plan to the plan file.
 ```
 
 ✅ 预期：
-- 模型能读取 package.json（read 工具始终允许）
+- 模型能读取 pyproject.toml（read 工具始终允许）
 - 模型写入 plan file（唯一允许编辑的文件）
 - 如果尝试编辑其他文件，被拒绝：`Blocked in plan mode`
 
@@ -375,12 +379,12 @@ Read package.json, then create a plan for changing the project name. Write your 
 **测试目标**：验证 edit_file 的 curly quote → straight quote 回退匹配。
 
 ```
-Read the file test/quote-test.js
+Read the file test/quote-test.py
 ```
 
 然后要求使用弯引号编辑：
 ```
-Use edit_file on test/quote-test.js. In the old_string, use curly double quotes (Unicode U+201C and U+201D) around "Hello World". Replace with straight quotes saying "Hi Universe".
+Use edit_file on test/quote-test.py. In the old_string, use curly double quotes (Unicode U+201C and U+201D) around "Hello World". Replace with straight quotes saying "Hi Universe".
 ```
 
 ✅ 预期：
@@ -389,7 +393,7 @@ Use edit_file on test/quote-test.js. In the old_string, use curly double quotes 
 
 测完恢复：
 ```
-Edit test/quote-test.js, replace "Hi Universe" with "Hello World"
+Edit test/quote-test.py, replace "Hi Universe" with "Hello World"
 ```
 
 **设计意图**：LLM 输出和用户从文档复制的文本经常包含 Unicode 弯引号（`""`、`''`）。Claude Code 的 `normalizeQuotes` 函数先尝试精确匹配，失败后将两边都规范化为直引号再匹配，避免"找不到要替换的内容"的常见报错。
@@ -401,22 +405,22 @@ Edit test/quote-test.js, replace "Hi Universe" with "Hello World"
 **测试目标**：验证正则搜索 + include 文件过滤。
 
 ```
-Use grep_search to find all lines containing "import.*chalk" in the src/ directory
+Use grep_search to find all lines containing "import.*chalk" in the mini_claude package
 ```
 
-✅ 预期：返回 `src/agent.ts` 和/或 `src/ui.ts` 中的匹配行，格式为 `文件路径:行号:匹配内容`
+✅ 预期：返回 `mini_claude/agent.py` 和/或 `mini_claude/ui.py` 中的匹配行，格式为 `文件路径:行号:匹配内容`
 
 ```
-Use grep_search to find the pattern "export function" in all .ts files under src/
+Use grep_search to find the pattern "export function" in all .py files under mini_claude/
 ```
 
-✅ 预期：使用 `include: "*.ts"` 过滤，返回所有导出函数的位置
+✅ 预期：使用 `include: "*.py"` 过滤，返回所有导出函数的位置
 
 ```
 Use grep_search to find "DANGEROUS_PATTERNS" in the project
 ```
 
-✅ 预期：返回 `src/tools.ts` 中的定义位置
+✅ 预期：返回 `mini_claude/tools.py` 中的定义位置
 
 ---
 
@@ -457,17 +461,17 @@ Create a file test/tmp/long-file.txt with 50 numbered lines like "Line 1: test d
 
 **第一次会话**：
 ```bash
-node dist/cli.js --yolo          # TS 版
+python -m mini_claude --yolo          # Python 版
 python -m mini_claude --yolo     # Python 版
 ```
 ```
-Remember this: The secret code is BANANA-42. Read package.json and tell me the version.
+Remember this: The secret code is BANANA-42. Read pyproject.toml and tell me the version.
 ```
 然后 `exit` 退出。
 
 **第二次会话（恢复）**：
 ```bash
-node dist/cli.js --yolo --resume          # TS 版
+python -m mini_claude --yolo --resume          # Python 版
 python -m mini_claude --yolo --resume     # Python 版
 ```
 
@@ -481,7 +485,7 @@ What was the secret code I told you earlier?
 
 **对比（新会话）**：
 ```bash
-node dist/cli.js --yolo          # TS 版
+python -m mini_claude --yolo          # Python 版
 python -m mini_claude --yolo     # Python 版
 ```
 ```
@@ -498,10 +502,10 @@ What was the secret code I told you earlier?
 **测试目标**：验证传入 prompt 参数时自动执行并退出。
 
 ```bash
-# TS 版
-node dist/cli.js --yolo "Read the file package.json and tell me the project name. Only output the name."
 # Python 版
-python -m mini_claude --yolo "Read the file package.json and tell me the project name. Only output the name."
+python -m mini_claude --yolo "Read the file pyproject.toml and tell me the project name. Only output the name."
+# Python 版
+python -m mini_claude --yolo "Read the file pyproject.toml and tell me the project name. Only output the name."
 ```
 
 ✅ 预期：
@@ -509,14 +513,14 @@ python -m mini_claude --yolo "Read the file package.json and tell me the project
 - 程序**自动退出**（返回 shell prompt）
 
 ```bash
-node dist/cli.js --yolo "List all TypeScript files in the src/ directory"
+python -m mini_claude --yolo "List all Python files in the mini_claude package"
 ```
 
-✅ 预期：输出 .ts 文件列表，然后自动退出
+✅ 预期：输出 .py 文件列表，然后自动退出
 
 错误场景：
 ```bash
-node dist/cli.js --yolo "Read the file /nonexistent/path/file.txt"
+python -m mini_claude --yolo "Read the file /nonexistent/path/file.txt"
 ```
 ✅ 预期：工具返回错误信息，但程序不 crash，正常退出
 
@@ -527,10 +531,10 @@ node dist/cli.js --yolo "Read the file /nonexistent/path/file.txt"
 **测试目标**：验证 agent 循环次数限制。
 
 ```bash
-# TS 版
-node dist/cli.js --yolo --max-turns 2 "Read these files one by one: package.json, tsconfig.json, src/cli.ts, src/agent.ts, src/tools.ts. Tell me the line count of each."
 # Python 版
-python -m mini_claude --yolo --max-turns 2 "Read these files one by one: package.json, tsconfig.json, src/cli.ts, src/agent.ts, src/tools.ts. Tell me the line count of each."
+python -m mini_claude --yolo --max-turns 2 "Read these files one by one: pyproject.toml, pyproject.toml, mini_claude/__main__.py, mini_claude/agent.py, mini_claude/tools.py. Tell me the line count of each."
+# Python 版
+python -m mini_claude --yolo --max-turns 2 "Read these files one by one: pyproject.toml, pyproject.toml, mini_claude/__main__.py, mini_claude/agent.py, mini_claude/tools.py. Tell me the line count of each."
 ```
 
 ✅ 预期：
@@ -555,7 +559,7 @@ What agent types are available? List them all.
 ✅ 预期：列表中包含 explore、plan、general 和 **reviewer**
 
 ```
-Use the agent tool with type "reviewer" to review the file src/frontmatter.ts
+Use the agent tool with type "reviewer" to review the file mini_claude/frontmatter.py
 ```
 
 ✅ 预期：
@@ -579,24 +583,32 @@ bash test/cleanup.sh
 
 ## 快速对照表
 
-| # | 功能 | 类别 | TS 通过 | PY 通过 | 备注 |
-|---|------|------|:---:|:---:|------|
-| 1 | MCP 工具调用 | 基础工具 | ☐ | ☐ | 3 个工具 |
-| 2 | WebFetch | 基础工具 | ☐ | ☐ | httpbin.org |
-| 3 | 并行工具执行 | 基础工具 | ☐ | ☐ | 多文件同时读 |
-| 4 | 语义记忆召回 | 记忆上下文 | ☐ | ☐ | 保存→新对话→语义查询 |
-| 5 | @include + Rules | 记忆上下文 | ☐ | ☐ | 中文回复 |
-| 6 | Read-before-edit | 记忆上下文 | ☐ | ☐ | 代码层或 prompt 层 |
-| 7 | 大结果持久化 | 记忆上下文 | ☐ | ☐ | 75KB 文件 |
-| 8 | Skill 调用 | 技能扩展 | ☐ | ☐ | /greet /commit |
-| 9 | ToolSearch | 技能扩展 | ☐ | ☐ | plan mode 工具 |
-| 10 | REPL 命令 | 技能扩展 | ☐ | ☐ | /cost /memory /compact /plan |
-| 11 | Sub-agent 系统 | Agent 架构 | ☐ | ☐ | explore/plan/general |
-| 12 | Plan Mode | Agent 架构 | ☐ | ☐ | /plan 手动进入 + 审批 |
-| 13 | 引号规范化 | 编辑搜索 | ☐ | ☐ | curly → straight quotes |
-| 14 | Session Resume | 会话 CLI | ☐ | ☐ | --resume 恢复会话 |
-| 15 | One-shot 模式 | 会话 CLI | ☐ | ☐ | 传 prompt 自动退出 |
-| 16 | 预算控制 | 会话 CLI | ☐ | ☐ | --max-turns 限制 |
-| 17 | Grep Search | 编辑搜索 | ☐ | ☐ | 正则搜索 + include |
-| 18 | Write File | 编辑搜索 | ☐ | ☐ | 新文件 + 自动建目录 |
-| 19 | 自定义 Agent | 扩展系统 | ☐ | ☐ | .claude/agents/ 定义 |
+| # | 功能 | 类别 | 是否通过 | 备注 |
+|---|------|------|:---:|------|
+| 1 | MCP 工具调用 | 基础工具 | ☐ | 3 个工具 |
+| 2 | WebFetch | 基础工具 | ☐ | httpbin.org |
+| 3 | 并行工具执行 | 基础工具 | ☐ | 多文件同时读 |
+| 4 | 语义记忆召回 | 记忆上下文 | ☐ | 保存→新对话→语义查询 |
+| 5 | @include + Rules | 记忆上下文 | ☐ | 中文回复 |
+| 6 | Read-before-edit | 记忆上下文 | ☐ | 代码层或 prompt 层 |
+| 7 | 大结果持久化 | 记忆上下文 | ☐ | 75KB 文件 |
+| 8 | Skill 调用 | 技能扩展 | ☐ | /greet /commit |
+| 9 | `tool_search` | 技能扩展 | ☐ | plan mode 工具 |
+| 10 | REPL 命令 | 技能扩展 | ☐ | /cost /memory /compact /plan |
+| 11 | Sub-agent 系统 | Agent 架构 | ☐ | explore/plan/general |
+| 12 | Plan Mode | Agent 架构 | ☐ | /plan 手动进入 + 审批 |
+| 13 | 引号规范化 | 编辑搜索 | ☐ | curly → straight quotes |
+| 14 | Session Resume | 会话 CLI | ☐ | --resume 恢复会话 |
+| 15 | One-shot 模式 | 会话 CLI | ☐ | 传 prompt 自动退出 |
+| 16 | 预算控制 | 会话 CLI | ☐ | --max-turns 限制 |
+| 17 | Grep Search | 编辑搜索 | ☐ | 正则搜索 + include |
+| 18 | Write File | 编辑搜索 | ☐ | 新文件 + 自动建目录 |
+| 19 | 自定义 Agent | 扩展系统 | ☐ | .claude/agents/ 定义 |
+
+## 本章小结：为什么测试指南以手动验证为主
+
+编程智能体的端到端行为很难完全自动化，因为模型输出不是固定字符串。同一句提示在不同模型、不同上下文、不同时间可能会选择不同工具路径。测试指南的作用不是要求你看到一模一样的回答，而是验证关键能力是否真的发生：有没有调用 MCP 工具、有没有触发 read-before-edit、有没有进入 Plan Mode、有没有恢复会话。
+
+自动测试仍然有价值，但更适合覆盖确定性函数，比如 `parse_frontmatter()`、`check_permission()`、`_normalize_quotes()`、`_truncate_result()`。而完整智能体流程更适合用场景测试：给它一个任务，观察它是否调用了合理工具、是否遵守权限、是否能根据工具结果继续迭代。
+
+阅读本章时，建议把每个 Test 看成一个能力验收点。比如测试 `tool_search` 不是为了确认输出某段固定文本，而是确认 deferred 工具能被搜索、激活，并在下一轮成为可调用工具。这样测试就能帮助你理解架构，而不是变成机械跑命令。

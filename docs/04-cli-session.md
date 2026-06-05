@@ -6,7 +6,7 @@
 
 ```mermaid
 graph TB
-    Entry[cli.ts 入口] --> Parse[parseArgs<br/>参数解析]
+    Entry[__main__.py 入口] --> Parse[parse_args<br/>参数解析]
     Parse --> |有 prompt| OneShot[单次模式<br/>agent.chat → 退出]
     Parse --> |无 prompt| REPL[REPL 模式<br/>readline 循环]
     Parse --> |--resume| Restore[恢复会话]
@@ -25,7 +25,7 @@ graph TB
 
 ## Claude Code 怎么做的
 
-Claude Code 的入口是 `src/entrypoints/cli.tsx`——用 React/Ink 把组件模型搬进终端，支持流式 Markdown 渲染、Vim 模式、多 Tab、键盘自定义。会话用 JSONL 格式追加写入，崩溃安全。
+Claude Code 的入口使用 React/Ink 把组件模型搬进终端，支持流式 Markdown 渲染、Vim 模式、多 Tab、键盘自定义。会话用 JSONL 格式追加写入，崩溃安全。
 
 ### 终端原生 vs GUI
 
@@ -38,11 +38,11 @@ React/Ink 的作用是弥补终端的交互限制——有了组件模型，流�
 Claude Code UX 的核心理念：**Agent 自由行动，但让用户实时看到每一步**。
 
 ```
-📖 read_file src/app.ts
+📖 read_file mini_claude/agent.py
   1 | import express from ...
   ... (1234 chars total)
 
-✏️ edit_file src/app.ts
+✏️ edit_file mini_claude/agent.py
   - const port = 3000
   + const port = process.env.PORT
 ```
@@ -59,60 +59,7 @@ JSONL 每轮追加一行，O(1) 写入，崩溃最多丢最后一行。文件系
 
 ### 参数解析
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// cli.ts — parseArgs
-
-function parseArgs(): ParsedArgs {
-  const args = process.argv.slice(2);
-  let permissionMode: PermissionMode = "default";
-  let thinking = false;
-  let model = process.env.MINI_CLAUDE_MODEL || "claude-opus-4-6";
-  let apiBase: string | undefined;
-  let resume = false;
-  let maxCost: number | undefined;
-  let maxTurns: number | undefined;
-  const positional: string[] = [];
-
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--yolo" || args[i] === "-y") {
-      permissionMode = "bypassPermissions";
-    } else if (args[i] === "--plan") {
-      permissionMode = "plan";
-    } else if (args[i] === "--accept-edits") {
-      permissionMode = "acceptEdits";
-    } else if (args[i] === "--dont-ask") {
-      permissionMode = "dontAsk";
-    } else if (args[i] === "--thinking") {
-      thinking = true;
-    } else if (args[i] === "--model" || args[i] === "-m") {
-      model = args[++i] || model;
-    } else if (args[i] === "--api-base") {
-      apiBase = args[++i];
-    } else if (args[i] === "--resume") {
-      resume = true;
-    } else if (args[i] === "--max-cost") {
-      const v = parseFloat(args[++i]);
-      if (!isNaN(v)) maxCost = v;
-    } else if (args[i] === "--max-turns") {
-      const v = parseInt(args[++i], 10);
-      if (!isNaN(v)) maxTurns = v;
-    } else if (args[i] === "--help" || args[i] === "-h") {
-      console.log(`Usage: mini-claude [options] [prompt] ...`);
-      process.exit(0);
-    } else {
-      positional.push(args[i]);
-    }
-  }
-
-  return {
-    permissionMode, model, apiBase, resume, thinking, maxCost, maxTurns,
-    prompt: positional.length > 0 ? positional.join(" ") : undefined,
-  };
-}
-```
-#### **Python**
+#### Python
 ```python
 # __main__.py — parse_args
 
@@ -140,46 +87,16 @@ def _resolve_permission_mode(args: argparse.Namespace) -> str:
     if args.dont_ask: return "dontAsk"
     return "default"
 ```
-<!-- tabs:end -->
 
-TypeScript 版手写循环而不用 commander.js，因为只有 11 个参数，零依赖更轻。用 `for` 而不是 `forEach` 是因为带值参数（`--model claude-sonnet`）需要 `++i` 跳到下一个元素。Python 直接用标准库 `argparse`。
+Python 版直接用标准库 `argparse` 解析参数，因为参数数量不多，零额外依赖更轻。
+
+参数解析的作用不是简单地“读命令行字符串”，而是把用户的启动意图转成内部状态。比如 `--plan` 最终会变成权限模式 `plan`，`--yolo` 会变成 `bypassPermissions`，`--accept-edits` 会变成 `acceptEdits`。后面的 `Agent` 和权限系统并不关心用户敲了哪个参数，它们只关心当前处于哪种权限模式。
+
+这种映射让 CLI 层和核心逻辑解耦。以后如果你想增加 `--readonly` 作为 `--plan` 的别名，只需要改 `_resolve_permission_mode()`；如果你想新增一个模型参数，也只需要在 `main()` 创建 `Agent` 时传进去，不需要碰工具执行逻辑。
 
 ### 两种运行模式
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// cli.ts — main
-
-async function main() {
-  const { permissionMode, model, apiBase, prompt, resume, thinking, maxCost, maxTurns } = parseArgs();
-
-  // API key 从环境变量获取，不支持命令行传递（避免泄露到 shell history）
-  // 优先级：OPENAI_API_KEY + OPENAI_BASE_URL → ANTHROPIC_API_KEY → OPENAI_API_KEY
-  const resolvedApiKey = resolveApiKey(apiBase);
-  if (!resolvedApiKey) {
-    printError(`API key is required. Set ANTHROPIC_API_KEY or OPENAI_API_KEY env var.`);
-    process.exit(1);
-  }
-
-  const agent = new Agent({ permissionMode, model, apiBase, apiKey: resolvedApiKey, thinking, maxCost, maxTurns });
-
-  if (resume) {
-    const sessionId = getLatestSessionId();
-    if (sessionId) {
-      const session = loadSession(sessionId);
-      if (session) agent.restoreSession(session);
-    }
-  }
-
-  if (prompt) {
-    await agent.chat(prompt);       // 单次模式：执行后退出
-  } else {
-    await runRepl(agent);           // REPL 模式：交互循环
-  }
-}
-```
-#### **Python**
+#### Python
 ```python
 # __main__.py — main
 
@@ -218,67 +135,14 @@ def main() -> None:
     else:
         asyncio.run(run_repl(agent))
 ```
-<!-- tabs:end -->
+
+这段代码把启动方式分成两类。第一类是 one-shot 模式：命令行后面直接带 prompt，程序执行一次 `agent.chat(prompt)` 后退出。它适合脚本化使用，比如在 CI 或 shell 里临时问一个问题。第二类是 REPL 模式：没有 prompt 时进入交互式循环，用户可以连续追问，所有对话共享同一个 `Agent` 实例。
+
+共享同一个 `Agent` 实例很重要。它意味着消息历史、token 统计、确认过的路径、当前 Plan Mode 状态都会保留下来。如果每次输入都创建一个新 `Agent`，模型就会忘记前面读过什么文件，也无法基于上一轮工具结果继续推理。
 
 ### REPL 实现
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// cli.ts — runRepl
-
-async function runRepl(agent: Agent) {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-
-  let sigintCount = 0;
-  process.on("SIGINT", () => {
-    if (agent.isProcessing) {
-      agent.abort();
-      console.log("\n  (interrupted)");
-      sigintCount = 0;
-      printUserPrompt();
-    } else {
-      sigintCount++;
-      if (sigintCount >= 2) { console.log("\nBye!\n"); process.exit(0); }
-      console.log("\n  Press Ctrl+C again to exit.");
-      printUserPrompt();
-    }
-  });
-
-  printWelcome();
-
-  // rl.once 而非 rl.on：保证严格串行，避免多个 chat 并发修改消息历史
-  const askQuestion = (): void => {
-    printUserPrompt();
-    rl.once("line", async (line) => {
-      const input = line.trim();
-      sigintCount = 0;
-
-      if (!input) { askQuestion(); return; }
-      if (input === "exit" || input === "quit") { console.log("\nBye!\n"); process.exit(0); }
-
-      if (input === "/clear") { agent.clearHistory(); askQuestion(); return; }
-      if (input === "/cost")  { agent.showCost(); askQuestion(); return; }
-      if (input === "/compact") {
-        try { await agent.compact(); } catch (e: any) { printError(e.message); }
-        askQuestion(); return;
-      }
-      if (input === "/plan") { agent.togglePlanMode(); askQuestion(); return; }
-
-      try {
-        await agent.chat(input);
-      } catch (e: any) {
-        if (e.name !== "AbortError" && !e.message?.includes("aborted")) printError(e.message);
-      }
-
-      askQuestion();
-    });
-  };
-
-  askQuestion();
-}
-```
-#### **Python**
+#### Python
 ```python
 # __main__.py — run_repl
 
@@ -323,34 +187,16 @@ async def run_repl(agent: Agent) -> None:
         except Exception as e:
             if "abort" not in str(e).lower(): print_error(str(e))
 ```
-<!-- tabs:end -->
 
 **Ctrl+C 的双重语义**：处理中按下 → 中断当前操作，回到输入提示；空闲时按下 → 第一次提醒，第二次退出。这避免了两种意外：手滑 Ctrl+C 导致整个会话丢失，以及 Agent 跑偏时只能眼睁睁等它跑完。
+
+REPL 还承担了“本地命令分流”的职责。`/clear`、`/cost`、`/compact`、`/memory`、`/skills`、`/plan` 都不需要模型参与，它们直接操作本地状态。这样既省 token，也避免模型对本地控制命令产生误解。只有普通自然语言输入才会进入 `agent.chat()`。
 
 **`rl.once` vs `rl.on`**：`rl.on` 注册的 handler 不会等 `await agent.chat()` 完成就响应下一行输入，导致多个 chat 并发修改消息历史。`rl.once` 每次只监听一行，处理完再递归注册，天然串行。Python 的 `while + input() + await` 没有这个问题。
 
 ### 会话持久化
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// session.ts
-
-const SESSION_DIR = join(homedir(), ".mini-claude", "sessions");
-
-export function saveSession(id: string, data: SessionData): void {
-  ensureDir();
-  writeFileSync(join(SESSION_DIR, `${id}.json`), JSON.stringify(data, null, 2));
-}
-
-export function getLatestSessionId(): string | null {
-  const sessions = listSessions();
-  if (sessions.length === 0) return null;
-  sessions.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
-  return sessions[0].id;
-}
-```
-#### **Python**
+#### Python
 ```python
 # session.py
 
@@ -366,32 +212,14 @@ def get_latest_session_id() -> str | None:
     sessions.sort(key=lambda s: s.get("startTime", ""), reverse=True)
     return sessions[0].get("id")
 ```
-<!-- tabs:end -->
 
 每次 `agent.chat()` 完成后自动保存，保存失败静默忽略（不能因为磁盘满让整个对话崩溃）。恢复时直接把消息数组加载回 Agent：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// agent.ts
-private autoSave() {
-  try {
-    saveSession(this.sessionId, {
-      metadata: { id: this.sessionId, model: this.model, cwd: process.cwd(),
-                  startTime: this.sessionStartTime, messageCount: this.getMessageCount() },
-      anthropicMessages: this.useOpenAI ? undefined : this.anthropicMessages,
-      openaiMessages: this.useOpenAI ? this.openaiMessages : undefined,
-    });
-  } catch {}
-}
+会话保存的重点不是保存屏幕输出，而是保存下一次 API 调用需要的上下文。真正关键的是 `_anthropic_messages` 或 `_openai_messages`，以及模型、工作目录、消息数量等元数据。终端颜色、spinner 状态、当前输入行这些 UI 状态都不值得保存。
 
-restoreSession(data: { anthropicMessages?: any[]; openaiMessages?: any[] }) {
-  if (data.anthropicMessages) this.anthropicMessages = data.anthropicMessages;
-  if (data.openaiMessages) this.openaiMessages = data.openaiMessages;
-  printInfo(`Session restored (${this.getMessageCount()} messages).`);
-}
-```
-#### **Python**
+当前实现用 JSON 文件覆盖写入，比 Claude Code 的 JSONL 追加写入简单。JSON 的好处是恢复时直接 `json.loads()`，结构清楚；缺点是会话很长时每次保存都要重写完整文件。教程项目选择这种实现，是为了让读者先理解“会话恢复就是恢复消息历史”这个核心概念。
+
+#### Python
 ```python
 # agent.py
 def _auto_save(self) -> None:
@@ -411,32 +239,12 @@ def restore_session(self, data: dict) -> None:
     if data.get("openaiMessages"): self._openai_messages = data["openaiMessages"]
     print_info(f"Session restored ({self._get_message_count()} messages).")
 ```
-<!-- tabs:end -->
 
-### 终端 UI — ui.ts
+### 终端 UI — ui.py
 
-所有输出通过 `ui.ts` 统一格式化：
+所有输出通过 `mini_claude/ui.py` 统一格式化：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// ui.ts（使用 chalk）
-
-export function printToolCall(name: string, input: Record<string, any>) {
-  const icon = getToolIcon(name);      // read_file → 📖, run_shell → 💻
-  const summary = getToolSummary(name, input);
-  console.log(chalk.yellow(`\n  ${icon} ${name}`) + chalk.gray(` ${summary}`));
-}
-
-export function printToolResult(name: string, result: string) {
-  const maxLen = 500;
-  const truncated = result.length > maxLen
-    ? result.slice(0, maxLen) + chalk.gray(`\n  ... (${result.length} chars total)`)
-    : result;
-  console.log(chalk.dim(truncated.split("\n").map((l) => "  " + l).join("\n")));
-}
-```
-#### **Python**
+#### Python
 ```python
 # ui.py（使用 rich）
 
@@ -451,8 +259,15 @@ def print_tool_result(name: str, result: str) -> None:
     lines = "\n".join("  " + l for l in truncated.split("\n"))
     console.print(f"[dim]{lines}[/dim]")
 ```
-<!-- tabs:end -->
 
 工具结果在 UI 层截断到 500 字符——这是给人看的显示，完整结果已在消息历史中。
 
 > **下一章**：让 Agent 的输出实时显示——流式输出与双后端支持。
+
+## 本章小结：CLI 层在项目里负责什么
+
+CLI 层负责把“人和终端的交互”转换成“对 Agent 的方法调用”。它不应该理解工具细节，也不应该直接拼 API 请求。它要做的是解析参数、创建 `Agent`、处理 REPL 命令、响应 Ctrl+C、保存和恢复会话。
+
+实现上，`__main__.py` 里的 `parse_args()` 把命令行选项转成配置；`main()` 根据 API key、模型、权限模式创建 `Agent`；`run_repl()` 循环读取用户输入。如果输入是 `/clear`、`/cost`、`/compact`、`/memory`、`/skills` 这类本地命令，就直接操作本地状态；如果是普通文本，才调用 `agent.chat()`。
+
+会话持久化对应 `session.py`。它保存的重点不是终端显示内容，而是下一次模型调用需要的消息历史和 token 统计。这样 `--resume` 恢复后，模型仍然能看到之前对话做过什么。终端 UI 则在 `ui.py`，只负责把工具调用、结果、费用和计划审批展示得更清楚。

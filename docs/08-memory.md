@@ -8,7 +8,7 @@
 graph TB
     Save[保存记忆<br/>write_file → .md] --> Index[MEMORY.md 索引]
     Index --> Inject[注入 system prompt]
-    Query[用户提问] --> Prefetch[异步预取<br/>startMemoryPrefetch]
+    Query[用户提问] --> Prefetch[异步预取<br/>start_memory_prefetch]
     Prefetch --> SideQuery[sideQuery<br/>语义选择相关记忆]
     SideQuery --> Recall[注入为 user message]
 
@@ -60,6 +60,8 @@ Claude Code 记忆系统的核心约束只有一条：**只记忆不可从当前
 
 路径中的哈希是 `process.cwd()` 的 sha256 前 16 位——同一项目目录始终映射到同一记忆空间。
 
+这样设计是为了把“项目记忆”和“全局用户记忆”区分开。不同项目可能有完全不同的技术栈、测试命令和团队约定，如果都混在同一个目录里，模型很容易把 A 项目的规则带到 B 项目。用当前工作目录生成 hash，可以保证同一项目稳定命中同一份记忆，同时避免路径里出现过长或包含特殊字符的目录名。
+
 ### 记忆文件格式
 
 ```markdown
@@ -76,37 +78,9 @@ type: feedback
 
 ### Frontmatter 解析（共享模块）
 
-记忆和技能都要解析 YAML frontmatter，抽出 `frontmatter.ts`：
+记忆和技能都要解析 YAML frontmatter，抽出 `mini_claude/frontmatter.py`：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// frontmatter.ts
-
-export function parseFrontmatter(content: string): FrontmatterResult {
-  const lines = content.split("\n");
-  if (lines[0]?.trim() !== "---") return { meta: {}, body: content };
-
-  let endIdx = -1;
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === "---") { endIdx = i; break; }
-  }
-  if (endIdx === -1) return { meta: {}, body: content };
-
-  const meta: Record<string, string> = {};
-  for (let i = 1; i < endIdx; i++) {
-    const colonIdx = lines[i].indexOf(":");
-    if (colonIdx === -1) continue;
-    const key = lines[i].slice(0, colonIdx).trim();
-    const value = lines[i].slice(colonIdx + 1).trim();
-    if (key) meta[key] = value;
-  }
-
-  const body = lines.slice(endIdx + 1).join("\n").trim();
-  return { meta, body };
-}
-```
-#### **Python**
+#### Python
 ```python
 # frontmatter.py
 
@@ -142,39 +116,14 @@ def parse_frontmatter(content: str) -> FrontmatterResult:
     body = "\n".join(lines[end_idx + 1:]).strip()
     return FrontmatterResult(meta=meta, body=body)
 ```
-<!-- tabs:end -->
 
 没有用 `js-yaml` 之类的库——我们的 frontmatter 只是简单的 `key: value`，20 行手写解析器够用且零依赖。
 
+frontmatter 的作用是把“给程序看的元数据”和“给模型看的正文”分开。`name`、`description`、`type` 方便代码索引和筛选；正文则保存真正需要注入给模型的内容。这样扫描记忆时不必读取和理解整篇正文，只需要看前面的元数据就能先判断大概用途。
+
 ### 保存与索引
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// memory.ts — saveMemory
-
-export function saveMemory(entry: Omit<MemoryEntry, "filename">): string {
-  const dir = getMemoryDir();
-  const filename = `${entry.type}_${slugify(entry.name)}.md`;
-  const content = formatFrontmatter(
-    { name: entry.name, description: entry.description, type: entry.type },
-    entry.content
-  );
-  writeFileSync(join(dir, filename), content);
-  updateMemoryIndex();
-  return filename;
-}
-
-function updateMemoryIndex(): void {
-  const memories = listMemories();
-  const lines = ["# Memory Index", ""];
-  for (const m of memories) {
-    lines.push(`- **[${m.name}](${m.filename})** (${m.type}) — ${m.description}`);
-  }
-  writeFileSync(getIndexPath(), lines.join("\n"));
-}
-```
-#### **Python**
+#### Python
 ```python
 # memory.py — save_memory
 
@@ -195,35 +144,14 @@ def _update_memory_index() -> None:
         lines.append(f"- **[{m.name}]({m.filename})** ({m.type}) — {m.description}")
     _get_index_path().write_text("\n".join(lines))
 ```
-<!-- tabs:end -->
 
 文件名格式 `{type}_{slugified_name}.md` 让文件系统排序时自动按类型分组，人眼扫描也一目了然。每次写入后立即重建索引，保持 MEMORY.md 与文件系统同步。
 
+索引文件 `MEMORY.md` 不是给程序唯一依赖的数据库，而是给模型和人类快速浏览的目录。程序仍然可以扫描具体记忆文件；索引的好处是把“当前有哪些记忆”压缩成较短列表，适合放进系统提示词。如果没有索引，每次都把所有记忆正文塞给模型，很快就会浪费上下文。
+
 ### 索引截断
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// memory.ts — loadMemoryIndex
-
-const MAX_INDEX_LINES = 200;
-const MAX_INDEX_BYTES = 25000;
-
-export function loadMemoryIndex(): string {
-  // ...
-  const lines = content.split("\n");
-  if (lines.length > MAX_INDEX_LINES) {
-    content = lines.slice(0, MAX_INDEX_LINES).join("\n") +
-      "\n\n[... truncated, too many memory entries ...]";
-  }
-  if (Buffer.byteLength(content) > MAX_INDEX_BYTES) {
-    content = content.slice(0, MAX_INDEX_BYTES) +
-      "\n\n[... truncated, index too large ...]";
-  }
-  return content;
-}
-```
-#### **Python**
+#### Python
 ```python
 # memory.py — load_memory_index
 
@@ -242,49 +170,14 @@ def load_memory_index() -> str:
         content = content[:MAX_INDEX_BYTES] + "\n\n[... truncated, index too large ...]"
     return content
 ```
-<!-- tabs:end -->
 
 两层截断各有用途：行截断（200 行）是正常防护，按完整条目截断；字节截断（25KB）是异常防御，捕捉行数不多但单行极长的情况——Claude Code 团队在生产中见过 197KB 塞在 200 行内的案例。
 
-### System Prompt 注入
+### 系统提示词注入
 
 `buildMemoryPromptSection()` 生成注入到 system prompt 的文本，告诉模型记忆系统的存在和用法：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// memory.ts — buildMemoryPromptSection（简化展示）
-
-export function buildMemoryPromptSection(): string {
-  const index = loadMemoryIndex();
-  const memoryDir = getMemoryDir();
-
-  return `# Memory System
-
-You have a persistent, file-based memory system at \`${memoryDir}\`.
-
-## Memory Types
-- **user**: User's role, preferences, knowledge level
-- **feedback**: Corrections and guidance from the user
-- **project**: Ongoing work, goals, deadlines, decisions
-- **reference**: Pointers to external resources
-
-## How to Save Memories
-Use the write_file tool to create a memory file with YAML frontmatter:
-...
-Save to: \`${memoryDir}/\`
-Filename format: \`{type}_{slugified_name}.md\`
-
-## What NOT to Save
-- Code patterns or architecture (read the code instead)
-- Git history (use git log)
-- Anything already in CLAUDE.md
-- Ephemeral task details
-
-${index ? `## Current Memory Index\n${index}` : "(No memories saved yet.)"}`;
-}
-```
-#### **Python**
+#### Python
 ```python
 # memory.py — build_memory_prompt_section（简化展示）
 
@@ -316,43 +209,21 @@ Filename format: `{{type}}_{{slugified_name}}.md`
 
 {"## Current Memory Index" + chr(10) + index if index else "(No memories saved yet.)"}"""
 ```
-<!-- tabs:end -->
 
 这段 prompt 做了三件事：教模型分类（四种类型）、教模型操作（用 `write_file`、存到哪里、什么格式）、教模型克制（"What NOT to Save"）。"让模型使用记忆"不只是给它一个工具，还要在 prompt 中描述完整的类型体系和边界，模型才能做出好的决策。
 
-最后在 `prompt.ts` 中通过占位符注入：
+最后在 `mini_claude/prompt.py` 中通过占位符注入：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-systemPrompt = systemPrompt.replace("{{memory}}", buildMemoryPromptSection());
-```
-#### **Python**
+#### Python
 ```python
 result = result.replace("{{memory}}", build_memory_prompt_section())
 ```
-<!-- tabs:end -->
 
 ### CLI 交互
 
 用户在 REPL 中输入 `/memory` 可以列出所有记忆：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-if (input === "/memory") {
-  const memories = listMemories();
-  if (memories.length === 0) {
-    printInfo("No memories saved yet.");
-  } else {
-    printInfo(`${memories.length} memories:`);
-    for (const m of memories) {
-      console.log(`    [${m.type}] ${m.name} — ${m.description}`);
-    }
-  }
-}
-```
-#### **Python**
+#### Python
 ```python
 if inp == "/memory":
     memories = list_memories()
@@ -364,7 +235,6 @@ if inp == "/memory":
             print(f"    [{m.type}] {m.name} — {m.description}")
     continue
 ```
-<!-- tabs:end -->
 
 ---
 
@@ -374,74 +244,44 @@ if inp == "/memory":
 
 新版本用 `sideQuery` 做语义召回：把所有记忆的文件名和描述发给模型，让模型判断哪些与当前查询相关。
 
-```typescript
-// memory.ts — selectRelevantMemories
+```python
+SELECT_MEMORIES_PROMPT = """You are selecting memories that will be useful to an AI coding assistant as it processes a user's query.
 
-const SELECT_MEMORIES_PROMPT = `You are selecting memories that will be useful to an AI coding assistant as it processes a user's query. You will be given the user's query and a list of available memory files with their filenames and descriptions.
-
-Return a JSON object with a "selected_memories" array of filenames for the memories that will clearly be useful (up to 5). Only include memories that you are certain will be helpful based on their name and description.
+Return a JSON object with a "selected_memories" array of filenames for the memories that will clearly be useful (up to 5).
 - If you are unsure if a memory will be useful, do not include it.
-- If no memories would clearly be useful, return an empty array.`;
+- If no memories would clearly be useful, return an empty array."""
 
-export async function selectRelevantMemories(
-  query: string,
-  sideQuery: SideQueryFn,
-  alreadySurfaced: Set<string>,
-  signal?: AbortSignal,
-): Promise<RelevantMemory[]> {
-  const headers = scanMemoryHeaders();
-  if (headers.length === 0) return [];
 
-  // 过滤已经在本会话中展示过的记忆
-  const candidates = headers.filter((h) => !alreadySurfaced.has(h.filePath));
-  if (candidates.length === 0) return [];
+async def select_relevant_memories(
+    query: str,
+    side_query: SideQueryFn,
+    already_surfaced: set[str],
+) -> list[RelevantMemory]:
+    headers = scan_memory_headers()
+    candidates = [h for h in headers if h.file_path not in already_surfaced]
+    if not candidates:
+        return []
 
-  const manifest = formatMemoryManifest(candidates);
+    manifest = format_memory_manifest(candidates)
+    text = await side_query(
+        SELECT_MEMORIES_PROMPT,
+        f"Query: {query}\n\nAvailable memories:\n{manifest}",
+    )
 
-  try {
-    const text = await sideQuery(
-      SELECT_MEMORIES_PROMPT,
-      `Query: ${query}\n\nAvailable memories:\n${manifest}`,
-      signal,
-    );
+    match = re.search(r"\{[\s\S]*\}", text)
+    if not match:
+        return []
 
-    // 从响应中提取 JSON（模型可能用 markdown 代码块包裹）
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) return [];
-
-    const parsed = JSON.parse(jsonMatch[0]);
-    const selectedFilenames: string[] = parsed.selected_memories || [];
-
-    // 文件名映射回 header，读取完整内容
-    const filenameSet = new Set(selectedFilenames);
-    const selected = candidates.filter((h) => filenameSet.has(h.filename));
-
-    return selected.slice(0, 5).map((h) => {
-      let content = readFileSync(h.filePath, "utf-8");
-      // 单文件截断（4KB）
-      if (Buffer.byteLength(content) > MAX_MEMORY_BYTES_PER_FILE) {
-        content = content.slice(0, MAX_MEMORY_BYTES_PER_FILE) +
-          "\n\n[... truncated, memory file too large ...]";
-      }
-      const freshness = memoryFreshnessWarning(h.mtimeMs);
-      const headerText = freshness
-        ? `${freshness}\n\nMemory: ${h.filePath}:`
-        : `Memory (saved ${memoryAge(h.mtimeMs)}): ${h.filePath}:`;
-
-      return { path: h.filePath, content, mtimeMs: h.mtimeMs, header: headerText };
-    });
-  } catch (err: any) {
-    // 静默失败——记忆召回永远不应阻塞主循环
-    if (signal?.aborted) return [];
-    console.error(`[memory] semantic recall failed: ${err.message}`);
-    return [];
-  }
-}
+    parsed = json.loads(match.group(0))
+    selected_filenames = set(parsed.get("selected_memories", []))
+    selected = [h for h in candidates if h.filename in selected_filenames][:5]
 ```
 
 几个关键设计点：
 
 **sideQuery 用的是同一个模型，不是单独的小模型。** Claude Code 用 Sonnet 做 sideQuery，我们简化为直接复用用户配置的模型。sideQuery 只发送记忆清单（文件名 + 描述），不发送完整内容，所以输入 token 很少。
+
+这里的 sideQuery 可以理解成“旁路小任务”。主模型正在处理用户请求，同时系统额外问模型一个更窄的问题：这些记忆里哪些和当前请求有关？它不需要完整工具列表，也不需要完整对话，只需要用户问题和记忆清单。这样可以用很少的上下文换来更准确的记忆召回。
 
 **模型做语义选择，比关键词匹配强得多。** "部署流程"能匹配到"CI/CD 注意事项"，"数据库性能"能匹配到"PostgreSQL 索引优化经验"——因为模型理解语义关联，不只是字面重叠。
 
@@ -451,76 +291,64 @@ export async function selectRelevantMemories(
 
 > **对比旧版关键词匹配（已替换）：** 旧实现把查询拆词后逐条匹配，零 API 调用但准确度低。新版每次召回消耗 1 次 API 调用，但语义理解能力质的飞跃。对于教程项目记忆量少的场景，这个 API 成本完全可以接受。
 
-### 异步预取（startMemoryPrefetch）
+### 异步预取（`start_memory_prefetch`）
 
 语义召回需要一次 API 调用，如果同步执行会增加用户等待时间。解决方案：**在用户提交输入的瞬间就启动召回，与第一次模型 API 调用并行执行。**
 
-```typescript
-// memory.ts — startMemoryPrefetch
+异步预取的意义是把记忆召回的耗时藏起来。用户提交问题后，主循环很快就要调用模型生成第一轮响应；与此同时，记忆系统可以在后台判断哪些长期记忆相关。等主模型需要继续下一轮时，相关记忆通常已经准备好，可以作为 `<system-reminder>` 注入，而不需要让用户额外等待。
 
-export function startMemoryPrefetch(
-  query: string,
-  sideQuery: SideQueryFn,
-  alreadySurfaced: Set<string>,
-  sessionMemoryBytes: number,
-  signal?: AbortSignal,
-): MemoryPrefetch | null {
-  // 门控 1: 单词查询跳过（太短，无法语义匹配）
-  if (!/\s/.test(query.trim())) return null;
+```python
+class MemoryPrefetch:
+    def __init__(self, task: asyncio.Task):
+        self.task = task
+        self.consumed = False
 
-  // 门控 2: 会话预算已满
-  if (sessionMemoryBytes >= MAX_SESSION_MEMORY_BYTES) return null;
+    @property
+    def settled(self) -> bool:
+        return self.task.done()
 
-  // 门控 3: 没有记忆文件
-  const dir = getMemoryDir();
-  const hasMemories = readdirSync(dir).some(
-    (f) => f.endsWith(".md") && f !== "MEMORY.md"
-  );
-  if (!hasMemories) return null;
 
-  const handle: MemoryPrefetch = {
-    promise: selectRelevantMemories(query, sideQuery, alreadySurfaced, signal),
-    settled: false,
-    consumed: false,
-  };
-  handle.promise.then(() => { handle.settled = true; }).catch(() => { handle.settled = true; });
-  return handle;
-}
+def start_memory_prefetch(
+    query: str,
+    side_query: SideQueryFn,
+    already_surfaced: set[str],
+    session_memory_bytes: int,
+) -> MemoryPrefetch | None:
+    if not re.search(r"\s", query.strip()):
+        return None
+    if session_memory_bytes >= MAX_SESSION_MEMORY_BYTES:
+        return None
+    if not any(f.suffix == ".md" and f.name != "MEMORY.md" for f in get_memory_dir().iterdir()):
+        return None
+
+    task = asyncio.create_task(
+        select_relevant_memories(query, side_query, already_surfaced)
+    )
+    return MemoryPrefetch(task)
 ```
 
-在 `agent.ts` 中的使用：
+在 `mini_claude/agent.py` 中的使用：
 
-```typescript
-// agent.ts — 预取启动与消费
+```python
+memory_prefetch: MemoryPrefetch | None = None
+if not self.is_sub_agent:
+    side_query = self._build_side_query()
+    if side_query:
+        memory_prefetch = start_memory_prefetch(
+            user_message,
+            side_query,
+            self._already_surfaced_memories,
+            self._session_memory_bytes,
+        )
 
-// 用户消息进入后立即启动预取
-this.anthropicMessages.push({ role: "user", content: userMessage });
-let memoryPrefetch: MemoryPrefetch | null = null;
-if (!this.isSubAgent) {
-  const sq = this.buildSideQuery();
-  if (sq) {
-    memoryPrefetch = startMemoryPrefetch(
-      userMessage, sq,
-      this.alreadySurfacedMemories, this.sessionMemoryBytes,
-      this.abortController?.signal,
-    );
-  }
-}
-
-// while 循环中，每次 API 调用前做非阻塞轮询
-if (memoryPrefetch && memoryPrefetch.settled && !memoryPrefetch.consumed) {
-  memoryPrefetch.consumed = true;
-  const memories = await memoryPrefetch.promise;
-  if (memories.length > 0) {
-    const injectionText = formatMemoriesForInjection(memories);
-    this.anthropicMessages.push({ role: "user", content: injectionText });
-    // 跟踪已展示的记忆和会话预算
-    for (const m of memories) {
-      this.alreadySurfacedMemories.add(m.path);
-      this.sessionMemoryBytes += Buffer.byteLength(m.content);
-    }
-  }
-}
+while True:
+    if memory_prefetch and memory_prefetch.settled and not memory_prefetch.consumed:
+        memory_prefetch.consumed = True
+        memories = memory_prefetch.task.result()
+        if memories:
+            injection_text = format_memories_for_injection(memories)
+            last = self._anthropic_messages[-1]
+            last["content"] = last["content"] + "\n\n" + injection_text
 ```
 
 这个设计的关键在于**非阻塞轮询**：
@@ -537,26 +365,42 @@ if (memoryPrefetch && memoryPrefetch.settled && !memoryPrefetch.consumed) {
 
 `formatMemoriesForInjection` 把每条记忆包裹在 `<system-reminder>` 标签中注入为 user message：
 
-```typescript
-export function formatMemoriesForInjection(memories: RelevantMemory[]): string {
-  return memories
-    .map((m) => `<system-reminder>\n${m.header}\n\n${m.content}\n</system-reminder>`)
-    .join("\n\n");
-}
+```python
+def format_memories_for_injection(memories: list[RelevantMemory]) -> str:
+    parts = []
+    for memory in memories:
+        parts.append(
+            f"<system-reminder>\n"
+            f"{memory.header}\n\n"
+            f"{memory.content}\n"
+            f"</system-reminder>"
+        )
+    return "\n\n".join(parts)
 ```
 
 ### Freshness Warning
 
 记忆是时间切片，不是实时状态。一条"项目下周截止"的记忆在两周后读到时已经过时，模型如果不知道这一点就会给出错误建议。
 
-```typescript
-// memory.ts — memoryFreshnessWarning
+```python
+def memory_age(mtime_ms: float) -> str:
+    days = max(0, int((time.time() * 1000 - mtime_ms) / 86_400_000))
+    if days == 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    return f"{days} days ago"
 
-export function memoryFreshnessWarning(mtimeMs: number): string {
-  const days = Math.max(0, Math.floor((Date.now() - mtimeMs) / 86_400_000));
-  if (days <= 1) return "";
-  return `This memory is ${days} days old. Memories are point-in-time observations, not live state — claims about code behavior may be outdated. Verify against current code before asserting as fact.`;
-}
+
+def memory_freshness_warning(mtime_ms: float) -> str:
+    days = max(0, int((time.time() * 1000 - mtime_ms) / 86_400_000))
+    if days <= 1:
+        return ""
+    return (
+        f"This memory is {days} days old. Memories are point-in-time observations, "
+        "not live state — claims about code behavior may be outdated. "
+        "Verify against current code before asserting as fact."
+    )
 ```
 
 规则很简单：1 天以内不提示（信息基本新鲜），超过 1 天就附带警告。警告文本明确告诉模型两件事："这是过去某个时刻的观察"和"需要对照当前代码验证"。这比简单标注"X 天前"更有效——它给出了行动指引，而非只是信息。
@@ -578,11 +422,146 @@ export function memoryFreshnessWarning(mtimeMs: number): string {
 | 维度 | Claude Code | mini-claude |
 |------|------------|-------------|
 | **召回方式** | Sonnet sideQuery 语义匹配 | sideQuery 语义匹配（同模型） |
-| **异步预取** | pendingMemoryPrefetch | startMemoryPrefetch |
+| **异步预取** | `memory_prefetch` | `start_memory_prefetch` |
 | **会话预算** | 60KB | 60KB |
 | **Freshness** | 过期警告 | 过期警告 |
 | **API 调用** | 每次召回 1 次 | 每次召回 1 次 |
 
 ---
 
+## 补充理解：这些概念到底在解决什么问题
+
+本章容易混淆的点在于：记忆系统不是“把所有历史对话保存起来再全部喂给模型”，而是一个小型检索系统。它先把长期信息保存下来，再在用户提问时挑出少量相关内容注入上下文。
+
+### 封闭分类法 vs 自由标签
+
+“封闭分类法”指记忆只能属于固定的几类：`user`、`feedback`、`project`、`reference`。这四类是系统提前定义好的，不允许模型随手创造新类型。
+
+“自由标签”则是给每条记忆随便打 tag，比如 `deploy`、`deployment`、`ci`、`cicd`、`release`、`上线`、`部署`。一开始看起来很灵活，但时间长了会出现标签膨胀：同一个意思被写成很多相近标签，召回时反而更模糊。
+
+举个例子，用户问“部署流程”，相关记忆可能叫“CI/CD 注意事项”。如果系统依赖关键词或标签，而这条记忆只打了 `ci`、`release`，就可能漏掉。mini-claude 的设计是：类型只负责粗分类，真正的相关性由 `name`、`description` 和 sideQuery 的语义判断完成。
+
+所以封闭分类法的目的不是让分类更细，而是让分类更稳定。它避免模型在长期运行中造出越来越多相似但不统一的标签。
+
+### 保存与索引
+
+“保存”是把一条长期记忆写成独立 Markdown 文件。例如：
+
+```markdown
+---
+name: staging 部署前跑 smoke test
+description: 项目部署到 staging 前需要先执行 smoke test
+type: project
+---
+这个项目部署到 staging 前需要先跑 smoke test。
+```
+
+“索引”是自动生成 `MEMORY.md`，把所有记忆压缩成一份目录：
+
+```markdown
+# Memory Index
+
+- **[staging 部署前跑 smoke test](project_staging_deploy_smoke_test.md)** (project) — 项目部署到 staging 前需要先执行 smoke test
+- **[用户喜欢简洁回复](user_prefers_concise_output.md)** (user) — 用户偏好直接、少总结
+```
+
+`MEMORY.md` 的作用类似书的目录。模型启动时先看到“有哪些记忆”，但不会一开始就读取所有正文。这样既能让模型知道记忆系统里有什么，又不会把上下文塞满。
+
+这也是为什么文档强调 `MEMORY.md` 是索引，不是容器。真正的内容在单独记忆文件里；索引只保留名称、类型、描述和链接。
+
+### 索引截断
+
+索引截断是为了防止 `MEMORY.md` 自己变成上下文负担。
+
+`MEMORY.md` 会被注入 system prompt。如果记忆越来越多，索引可能增长到几百行甚至几千行。此时每次对话都带着巨大目录，会带来几个问题：
+
+- token 成本变高
+- system prompt 变长，挤占真正对话内容
+- 模型注意力被大量无关记忆分散
+- 极端情况下超过上下文限制
+
+所以实现中设置了两层保护：最多 200 行，最多 25KB。行数限制负责正常截断，字节限制负责防御“行数不多但单行极长”的异常情况。
+
+换句话说，索引截断是在维护一个边界：`MEMORY.md` 只能是轻量目录，不能膨胀成数据库。
+
+### 召回、sideQuery 和异步预取
+
+“召回”就是从长期记忆库里找出当前问题需要的几条。记忆少时可以全部注入，但记忆多了以后，全部注入会浪费上下文，还会让无关信息干扰模型。
+
+mini-claude 用 sideQuery 做语义召回。sideQuery 可以理解为旁路小任务：主模型处理用户问题的同时，系统额外问模型一个更窄的问题：
+
+> 用户现在问了这个问题。下面是可用记忆的文件名和描述。请选出最多 5 条明确有用的记忆。
+
+sideQuery 不需要完整工具列表，也不需要完整记忆正文。它只看记忆清单：
+
+```text
+- [project] project_ci_cd_notes.md: 记录项目发布流水线、staging 环境和生产部署约定
+- [user] user_prefers_concise_output.md: 用户喜欢简洁回复
+```
+
+然后返回类似：
+
+```json
+{"selected_memories": ["project_ci_cd_notes.md"]}
+```
+
+这样用户问“这个项目怎么部署？”时，模型能理解“部署”和“CI/CD”之间的语义关系，而不是只找字面相同的关键词。
+
+“异步预取”解决的是延迟问题。语义召回需要一次 API 调用，如果同步执行，用户每次提问都要多等一次模型请求。mini-claude 在用户输入进入主循环时就启动预取任务，同时继续主模型调用。后续循环只做非阻塞检查：如果预取完成，就把记忆注入；如果没完成，就先跳过。
+
+因此“延迟近乎为零”的意思不是召回不耗时，而是召回耗时被主回答流程掩盖了。最坏情况下相关记忆晚一轮进入上下文，但用户不会因为召回额外等待。
+
+### Freshness Warning
+
+Freshness Warning 解决的是“过期记忆误导模型”的问题。
+
+记忆是时间切片，不是实时状态。比如某天保存了一条：
+
+```text
+项目下周五上线。
+```
+
+两周后模型再次读到这条，如果不知道它已经过期，就可能继续把“下周五上线”当成当前事实，给出错误建议。
+
+所以实现会根据记忆文件的修改时间计算年龄。1 天以内不提示；超过 1 天，就在注入记忆时附带警告：
+
+```text
+This memory is 14 days old. Memories are point-in-time observations,
+not live state. Verify against current code before asserting as fact.
+```
+
+这段警告主要是给模型看的。它不只是标注“14 天前”，还明确给出行动指引：这只是过去某个时刻的观察，不是实时事实；如果涉及代码行为、项目状态、截止日期，需要对照当前代码或当前资料验证。
+
+所以 Freshness Warning 的作用可以概括为：降低模型把旧记忆当成新事实使用的风险。
+
+### 总体流程再串一次
+
+mini-claude 的记忆模块可以按下面这条链路理解：
+
+```text
+用户要求记住某件事
+→ 模型用 write_file 写入 memory 目录下的 Markdown 文件
+→ 写入后自动更新 MEMORY.md 索引
+→ system prompt 每次加载轻量索引和记忆使用规则
+→ 用户提出新问题
+→ start_memory_prefetch 启动异步 sideQuery
+→ sideQuery 根据问题和记忆清单选出最多 5 条
+→ 读取选中的记忆正文
+→ 如有需要附加 Freshness Warning
+→ 用 <system-reminder> 注入当前上下文
+→ 主模型基于当前问题、代码状态和召回记忆作答
+```
+
+这一套设计的核心取舍是：不用复杂数据库，也不把所有记忆无脑塞进上下文，而是用文件系统保存长期信息，用索引控制成本，用语义召回提升相关性，用异步预取降低体感延迟，用新鲜度警告避免旧信息误导。
+
+---
+
 > **下一章**：可复用的 Prompt 模块——技能系统。
+
+## 本章小结：记忆和会话历史有什么区别
+
+会话历史记录的是“这次对话发生过什么”，记忆记录的是“以后也值得保留的信息”。比如用户偏好、项目约定、某个长期存在的部署事实，都适合做记忆；某次临时调试的中间输出就不适合长期保存。
+
+实现上，`memory.py` 把记忆保存成带元数据头的 Markdown 文件。`save_memory()` 写入文件后会更新 `MEMORY.md` 索引；`build_memory_prompt_section()` 会把记忆规则和清单注入系统提示词；`select_relevant_memories()` 会通过旁路查询判断哪些记忆和当前问题有关；`start_memory_prefetch()` 则把这个判断异步化，避免阻塞主响应。
+
+相关概念是“召回”。如果记忆少，可以全部塞进提示词；但记忆一多，全部注入会浪费上下文，还可能让无关信息干扰模型。语义召回的意义就是：先给模型一个记忆目录，需要时再挑出相关内容。这样记忆系统才不会从帮助变成噪音。

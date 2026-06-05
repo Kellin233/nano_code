@@ -7,13 +7,13 @@
 ```mermaid
 graph LR
     Agent[Agent] --> |useOpenAI?| Switch{后端选择}
-    Switch -->|false| Anthropic[callAnthropicStream<br/>SDK stream 事件]
+    Switch -->|false| Anthropic[_call_anthropic_stream<br/>SDK stream 事件]
     Switch -->|true| OpenAI[callOpenAIStream<br/>手动 chunk 累积]
     Anthropic --> |stream.on text| Console[逐字输出]
     OpenAI --> |delta.content| Console
 
     Anthropic --> |content_block_stop| EarlyExec[流式工具执行<br/>安全工具立即启动]
-    OpenAI --> |响应完成| Batch[并行批量执行<br/>连续安全工具 Promise.all]
+    OpenAI --> |响应完成| Batch[并行批量执行<br/>连续安全工具 asyncio.gather]
     EarlyExec --> ToolResult[工具结果]
     Batch --> ToolResult
 
@@ -49,49 +49,7 @@ Claude Code 的一个关键优化：`StreamingToolExecutor` 在模型还在生�
 
 ### Anthropic 后端：SDK 内置 stream
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// agent.ts — callAnthropicStream
-
-private async callAnthropicStream(): Promise<Anthropic.Message> {
-  return withRetry(async (signal) => {
-    const createParams: any = {
-      model: this.model,
-      max_tokens: this.thinkingMode !== "disabled" ? maxOutput : 16384,
-      system: this.systemPrompt,
-      tools: toolDefinitions,
-      messages: this.anthropicMessages,
-    };
-
-    if (this.thinkingMode === "enabled") {
-      createParams.thinking = { type: "enabled", budget_tokens: maxOutput - 1 };
-    } else if (this.thinkingMode === "adaptive") {
-      createParams.thinking = { type: "enabled", budget_tokens: 10000 };
-    }
-
-    const stream = this.anthropicClient!.messages.stream(createParams, { signal });
-
-    let firstText = true;
-    stream.on("text", (text) => {
-      if (firstText) { printAssistantText("\n"); firstText = false; }
-      printAssistantText(text);
-    });
-
-    const finalMessage = await stream.finalMessage();
-
-    // thinking blocks 不存入历史，避免浪费上下文窗口
-    if (this.thinkingMode !== "disabled") {
-      finalMessage.content = finalMessage.content.filter(
-        (block: any) => block.type !== "thinking"
-      );
-    }
-
-    return finalMessage;
-  }, this.abortController?.signal);
-}
-```
-#### **Python**
+#### Python
 ```python
 # agent.py — _call_anthropic_stream
 
@@ -127,92 +85,16 @@ async def _call_anthropic_stream(self):
 
     return await _with_retry(_do)
 ```
-<!-- tabs:end -->
 
 Anthropic SDK 封装了全部 SSE 解析细节：`stream.on("text")` 直接给文本增量，`stream.finalMessage()` 返回和非流式完全一样的 `Message` 对象。`{ signal }` 把 AbortController 传进去，Ctrl+C 可以中断网络请求。
+
+当前 Python 代码里，流式输出的关键动作是 `_emit_text()`。主智能体模式下它直接打印到终端，子智能体模式下则写入 `_output_buffer`，最后作为字符串返回给父智能体。这样流式输出和子智能体复用同一套逻辑，不需要为“打印”和“收集”写两套分支。
 
 ### OpenAI 兼容后端：手动 chunk 累积
 
 OpenAI streaming 的 tool_calls 参数是分 chunk 到达的，需要手动累积重建。
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// agent.ts — callOpenAIStream
-
-private async callOpenAIStream(): Promise<OpenAI.ChatCompletion> {
-  return withRetry(async (signal) => {
-    const stream = await this.openaiClient!.chat.completions.create({
-      model: this.model,
-      max_tokens: 16384,
-      tools: toOpenAITools(),
-      messages: this.openaiMessages,
-      stream: true,
-      stream_options: { include_usage: true },
-    }, { signal });
-
-    let content = "";
-    let firstText = true;
-    const toolCalls: Map<number, { id: string; name: string; arguments: string }> = new Map();
-    let finishReason = "";
-    let usage: { prompt_tokens: number; completion_tokens: number } | undefined;
-
-    for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta;
-
-      if (chunk.usage) {
-        usage = { prompt_tokens: chunk.usage.prompt_tokens, completion_tokens: chunk.usage.completion_tokens };
-      }
-
-      if (!delta) continue;
-
-      if (delta.content) {
-        if (firstText) { printAssistantText("\n"); firstText = false; }
-        printAssistantText(delta.content);
-        content += delta.content;
-      }
-
-      // tool_calls 参数分片到达，按 index 累积
-      if (delta.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          const existing = toolCalls.get(tc.index);
-          if (existing) {
-            if (tc.function?.arguments) existing.arguments += tc.function.arguments;
-          } else {
-            toolCalls.set(tc.index, {
-              id: tc.id || "",
-              name: tc.function?.name || "",
-              arguments: tc.function?.arguments || "",
-            });
-          }
-        }
-      }
-
-      if (chunk.choices[0]?.finish_reason) finishReason = chunk.choices[0].finish_reason;
-    }
-
-    const assembledToolCalls = toolCalls.size > 0
-      ? Array.from(toolCalls.entries())
-          .sort(([a], [b]) => a - b)
-          .map(([_, tc]) => ({
-            id: tc.id, type: "function" as const,
-            function: { name: tc.name, arguments: tc.arguments },
-          }))
-      : undefined;
-
-    return {
-      id: "stream", object: "chat.completion", created: Date.now(), model: this.model,
-      choices: [{
-        index: 0,
-        message: { role: "assistant" as const, content: content || null, tool_calls: assembledToolCalls, refusal: null },
-        finish_reason: finishReason || "stop", logprobs: null,
-      }],
-      usage: usage || { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 },
-    } as OpenAI.ChatCompletion;
-  }, this.abortController?.signal);
-}
-```
-#### **Python**
+#### Python
 ```python
 # agent.py — _call_openai_stream
 
@@ -278,66 +160,37 @@ async def _call_openai_stream(self) -> dict:
 
     return await _with_retry(_do)
 ```
-<!-- tabs:end -->
 
 OpenAI tool_calls 的 `id` 和 `name` 只在第一个 chunk 出现，后续 chunk 只有 `arguments` 的增量片段。多个 tool_call 的 chunk 会交错到达，用 `index` 字段区分，累积结束后才能 `JSON.parse()`。
+
+这就是 OpenAI 兼容后端比 Anthropic 后端多一层“拼装”的原因。流式传输为了尽快返回内容，会把一个完整 JSON 参数拆成很多片段。如果代码在参数没拼完时就执行工具，就会得到半截 JSON。当前实现用 `tool_calls[index]` 累积每个工具调用，等流结束后再统一解析和执行。
+
+因此，两套后端最大的差异不在“能不能流式显示文本”，而在“能不能在流式过程中可靠知道某个工具调用已经完整”。Anthropic 的事件结构以 content block 为单位，`content_block_stop` 能明确表示单个 `tool_use` block 已经结束；OpenAI 兼容流里只有连续 delta，工具参数需要自己拼接，通常等完整响应结束后再执行更稳妥。
+
+可以简单记成：
+
+| 后端 | 文本流式 | 工具调用处理 | 适合的执行策略 |
+|------|----------|--------------|----------------|
+| Anthropic | SDK 直接提供事件 | block 级事件，单个工具调用可提前完整 | 流式过程中提前执行安全工具 |
+| OpenAI 兼容 | 手动读取 delta | tool_calls 参数要自己累积 | 响应结束后分批并行执行 |
 
 ### 工具格式转换
 
 两个 API 的工具定义几乎相同，只是字段名不一样：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-function toOpenAITools(): OpenAI.ChatCompletionTool[] {
-  return toolDefinitions.map((t) => ({
-    type: "function" as const,
-    function: { name: t.name, description: t.description, parameters: t.input_schema as Record<string, unknown> },
-  }));
-}
-```
-#### **Python**
+#### Python
 ```python
 def _to_openai_tools(tools: list[ToolDef]) -> list[dict]:
     return [{"type": "function", "function": {"name": t["name"], "description": t["description"], "parameters": t["input_schema"]}} for t in tools]
 ```
-<!-- tabs:end -->
 
 Anthropic 用 `input_schema`，OpenAI 用 `parameters`，内容完全一样。
 
+这一层转换的价值是让项目内部只维护一份工具定义。如果每个后端各写一套 schema，很容易出现 Anthropic 工具有新参数、OpenAI 版本忘了同步的问题。`_to_openai_tools()` 把差异限制在边界处，内部工具系统不用关心具体 API 后端。
+
 ### 重试机制
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-function isRetryable(error: any): boolean {
-  const status = error?.status || error?.statusCode;
-  if ([429, 503, 529].includes(status)) return true;
-  if (error?.code === "ECONNRESET" || error?.code === "ETIMEDOUT") return true;
-  if (error?.message?.includes("overloaded")) return true;
-  return false;
-}
-
-async function withRetry<T>(
-  fn: (signal?: AbortSignal) => Promise<T>,
-  signal?: AbortSignal,
-  maxRetries = 3
-): Promise<T> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await fn(signal);
-    } catch (error: any) {
-      if (signal?.aborted) throw error;
-      if (attempt >= maxRetries || !isRetryable(error)) throw error;
-      const delay = Math.min(1000 * Math.pow(2, attempt), 30000) + Math.random() * 1000;
-      const reason = error?.status ? `HTTP ${error.status}` : error?.code || "network error";
-      printRetry(attempt + 1, maxRetries, reason);
-      await new Promise((r) => setTimeout(r, delay));
-    }
-  }
-}
-```
-#### **Python**
+#### Python
 ```python
 def _is_retryable(error: Exception) -> bool:
     status = getattr(error, "status_code", None) or getattr(error, "status", None)
@@ -360,7 +213,6 @@ async def _with_retry(fn, max_retries: int = 3):
             print_retry(attempt + 1, max_retries, reason)
             await asyncio.sleep(delay)
 ```
-<!-- tabs:end -->
 
 延迟公式 `min(1000 * 2^attempt, 30000) + random(0, 1000)`：指数部分控制退避速度，30 秒上限防止等待过久，随机抖动防止多个客户端同步重试形成"重试风暴"。
 
@@ -373,27 +225,7 @@ Extended Thinking 让模型在输出前有一个私有"草稿纸"做推理规划
 - **enabled**：`--thinking` flag 显式开启，budget 最大化
 - **disabled**：不支持 thinking 的模型（Claude 3.x 及 OpenAI）
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-function resolveThinkingMode(model: string, thinkingFlag: boolean): "adaptive" | "enabled" | "disabled" {
-  if (!modelSupportsThinking(model)) return "disabled";
-  if (thinkingFlag) return "enabled";
-  if (modelSupportsAdaptiveThinking(model)) return "adaptive";
-  return "disabled";
-}
-
-// 构造请求参数
-if (this.thinkingMode === "enabled") {
-  createParams.thinking = { type: "enabled", budget_tokens: maxOutput - 1 };
-} else if (this.thinkingMode === "adaptive") {
-  createParams.thinking = { type: "enabled", budget_tokens: 10000 };
-}
-
-// 过滤 thinking blocks，不存入历史
-finalMessage.content = finalMessage.content.filter((block: any) => block.type !== "thinking");
-```
-#### **Python**
+#### Python
 ```python
 def _resolve_thinking_mode(self) -> str:
     if not self.thinking or not _model_supports_thinking(self.model):
@@ -409,50 +241,85 @@ if self._thinking_mode in ("adaptive", "enabled"):
 # 过滤 thinking blocks，不存入历史
 final_message.content = [b for b in final_message.content if b.type != "thinking"]
 ```
-<!-- tabs:end -->
 
 thinking blocks 可能长达数千 token，对后续对话没有参考价值，过滤掉是避免上下文窗口被无效内容占满的直接手段。
+
+Extended Thinking 可以理解成“模型内部草稿”。它对复杂推理有帮助，但不应该长期进入会话历史。用户和后续模型调用真正需要的是结论、工具调用和工具结果，而不是每一步草稿推理。过滤 thinking blocks 既节省上下文，也避免后续回合被过时草稿干扰。
 
 ### 流式工具执行
 
 当 Anthropic 流式响应中某个 `tool_use` block 完整接收（`content_block_stop` 事件触发）时，如果该工具是并发安全的（`read_file`、`list_files`、`grep_search`、`web_fetch`），立即开始执行——不必等待整个 API 响应完成。这样可以把工具执行时间"藏"进模型生成后续内容的流式窗口中。
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// agent.ts — 流式工具执行
+这里的 `tool_use block` 是模型返回消息中的一块结构化内容，意思是“我要调用某个工具”。它通常包含工具调用 id、工具名和参数，例如：
 
-// 在流式过程中跟踪提前执行的工具
-const earlyExecutions = new Map<string, Promise<string>>();
-
-const response = await this.callAnthropicStream((block) => {
-  const input = block.input as Record<string, any>;
-  if (CONCURRENCY_SAFE_TOOLS.has(block.name)) {
-    const perm = checkPermission(block.name, input, this.permissionMode, this.planFilePath || undefined);
-    if (perm.action === "allow") {
-      earlyExecutions.set(block.id, this.executeToolCall(block.name, input));
-    }
+```json
+{
+  "type": "tool_use",
+  "id": "toolu_123",
+  "name": "read_file",
+  "input": {
+    "file_path": "docs/05-streaming.md"
   }
-});
-
-// 后续处理工具结果时：
-const earlyPromise = earlyExecutions.get(toolUse.id);
-if (earlyPromise) {
-  const raw = await earlyPromise;  // 已完成或即将完成
-  // ... 直接使用结果
-  continue;
 }
 ```
-#### **Python**
+
+后续工具结果会用同一个 id 配对回来：
+
+```json
+{
+  "type": "tool_result",
+  "tool_use_id": "toolu_123",
+  "content": "文件内容..."
+}
+```
+
+所以 `tool_use.id` 不只是标识符，它是工具调用和工具结果之间的配对关系。提前执行时也必须用这个 id 记录任务，避免多个同名工具调用互相覆盖。
+
+完整流程如下：
+
+```mermaid
+flowchart TD
+    A["Anthropic 流式响应"] --> B["接收 tool_use block"]
+    B --> C["累积 partial_json<br/>拼出完整 input"]
+    C --> D["content_block_stop<br/>单个工具调用完成"]
+    D --> E["触发 on_tool_block_complete"]
+    E --> F{"只读且权限 allow?"}
+    F -->|是| G["create_task 提前执行工具"]
+    G --> H["保存到 early_executions[id]"]
+    F -->|否| I["等待最终响应后普通处理"]
+
+    H --> J["stream 继续输出后续内容"]
+    I --> J
+    J --> K["final_message 完整返回"]
+    K --> L["主循环遍历 tool_uses"]
+    L --> M{"这个 id 已提前执行?"}
+    M -->|是| N["await task<br/>复用结果"]
+    M -->|否| O["权限检查<br/>正常执行工具"]
+```
+
+图里有两个关键点：`content_block_stop` 表示**单个工具调用**已经完整，不是整个响应结束；`early_executions` 用 `tool_use.id` 记录提前启动的任务，最终处理工具列表时直接 `await`，避免重复执行。
+
+`early_executions` 可以理解成“提前执行登记表”：
+
+```python
+{
+    "toolu_123": Task(read_file(...)),
+    "toolu_456": Task(grep_search(...)),
+}
+```
+
+它的 key 是 `tool_use.id`，value 是已经启动的 `asyncio.Task`。等完整响应返回后，主循环仍然会正常遍历所有 `tool_use`。如果发现某个 id 已经在 `early_executions` 里，就不再重新执行工具，而是直接 `await` 已经启动的任务。任务如果早就完成，`await` 会立刻返回；如果还没完成，就等它结束。
+
+#### Python
 ```python
 # agent.py — 流式工具执行
 
 # 在流式过程中跟踪提前执行的工具
 early_executions: dict[str, asyncio.Task] = {}
 
-async def on_tool_block_complete(block):
+def on_tool_block_complete(block):
     if block["name"] in CONCURRENCY_SAFE_TOOLS:
-        perm = check_permission(block["name"], block["input"], self._permission_mode)
+        perm = check_permission(block["name"], block["input"], self.permission_mode)
         if perm["action"] == "allow":
             task = asyncio.create_task(self._execute_tool_call(block["name"], block["input"]))
             early_executions[block["id"]] = task
@@ -466,48 +333,10 @@ if early_task:
     # ... 直接使用结果
     continue
 ```
-<!-- tabs:end -->
 
-`callAnthropicStream` 内部通过回调机制实现：
+`_call_anthropic_stream` 内部通过回调机制实现：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// agent.ts — callAnthropicStream 工具 block 跟踪
-
-private async callAnthropicStream(
-  onToolBlockComplete?: (block: Anthropic.ToolUseBlock) => void,
-): Promise<Anthropic.Message> {
-  // ...
-  const toolBlocksByIndex = new Map<number, { id: string; name: string; inputJson: string }>();
-
-  stream.on("streamEvent" as any, (event: any) => {
-    // 工具 block 跟踪：随着流式接收累积 input JSON
-    if (event.type === "content_block_start" && event.content_block?.type === "tool_use") {
-      toolBlocksByIndex.set(event.index, {
-        id: event.content_block.id,
-        name: event.content_block.name,
-        inputJson: "",
-      });
-    }
-    if (event.type === "content_block_delta" && event.delta?.type === "input_json_delta") {
-      const tracked = toolBlocksByIndex.get(event.index);
-      if (tracked) tracked.inputJson += event.delta.partial_json;
-    }
-    if (event.type === "content_block_stop" && onToolBlockComplete) {
-      const tracked = toolBlocksByIndex.get(event.index);
-      if (tracked) {
-        try {
-          const input = JSON.parse(tracked.inputJson);
-          onToolBlockComplete({ type: "tool_use", id: tracked.id, name: tracked.name, input });
-        } catch {}
-      }
-    }
-  });
-  // ...
-}
-```
-#### **Python**
+#### Python
 ```python
 # agent.py — _call_anthropic_stream 工具 block 跟踪
 
@@ -535,7 +364,7 @@ async def _call_anthropic_stream(self, on_tool_block_complete=None):
                         if tracked:
                             try:
                                 inp = json.loads(tracked["input_json"])
-                                await on_tool_block_complete({
+                                on_tool_block_complete({
                                     "type": "tool_use", "id": tracked["id"],
                                     "name": tracked["name"], "input": inp
                                 })
@@ -545,79 +374,41 @@ async def _call_anthropic_stream(self, on_tool_block_complete=None):
             final_message = await stream.get_final_message()
         # ...
 ```
-<!-- tabs:end -->
 
 设计要点：
 
 - **`content_block_stop` 是 block 级别事件**：当单个 `tool_use` block 的 JSON 完整接收时触发，并非整个响应结束。模型可能在一次响应中返回多个工具调用，第一个 block 完整时第二个可能还在流式传输中
 - **仅并发安全工具提前执行**：只有只读工具（`read_file`、`list_files`、`grep_search`、`web_fetch`）会被提前执行，写操作和命令执行不会
-- **权限检查仍然生效**：只有 `checkPermission` 返回 `"allow"` 的工具才会提前执行，需要用户确认的工具（`"confirm"`）不会被提前触发
-- **Promise/Task 存储，后续直接 await**：`earlyExecutions` Map 存储的是 Promise（TS）或 Task（Python），后续工具处理循环检查到已有提前执行的结果时，直接 await 即可——通常此时已经完成
+- **权限检查仍然生效**：只有 `check_permission()` 返回 `"allow"` 的工具才会提前执行，需要用户确认的工具（`"confirm"`）不会被提前触发
+- **Task 存储，后续直接 await**：`early_executions` 字典存储的是 `asyncio.Task`，后续工具处理循环检查到已有提前执行的结果时，直接 await 即可——通常此时已经完成
 - **核心收益**：5-30 秒的流式窗口期内，工具执行与模型生成并行进行，文件读取等快速操作在流结束时往往已经就绪
+
+还有一个需要理解的边界：提前执行不会跨越“模型回合”。第 2 轮模型调用一定发生在第 1 轮所有工具结果写回消息历史之后，所以不会出现第 2 轮的只读工具在第 1 轮写操作之前被提前执行。`early_executions` 也是每轮循环内部的新字典，不是跨轮缓存。
+
+真正需要注意的是**同一轮响应内部的混合工具顺序**。如果同一轮里出现 `[read_file, edit_file, read_file]`，理论上最后一个 `read_file` 应该读到编辑后的内容；但当前 Anthropic 提前执行策略只看工具是否并发安全，后面的 `read_file` 也可能在 `edit_file` 之前提前启动。实际模型通常会先读一轮、看到结果后下一轮再编辑，所以这种序列不常见；如果要更严格，可以加入“非安全工具屏障”：流式过程中一旦看到 `edit_file`、`write_file`、`run_shell` 这类非安全工具，后续安全工具不再提前执行，等最终主循环按顺序处理。
 
 ### 并行工具执行
 
 并行执行的前提是标记哪些工具是并发安全的——只读工具不会产生副作用，可以安全地同时运行：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// tools.ts
-export const CONCURRENCY_SAFE_TOOLS = new Set([
-  "read_file", "list_files", "grep_search", "web_fetch"
-]);
-```
-#### **Python**
+#### Python
 ```python
 # tools.py
 CONCURRENCY_SAFE_TOOLS = {"read_file", "list_files", "grep_search", "web_fetch"}
 ```
-<!-- tabs:end -->
 
 对于 Anthropic 后端，流式工具执行天然处理了并行——每个工具 block 完整时就启动执行，多个工具自然重叠运行。
 
-对于 OpenAI 后端（不支持流式工具 block 事件），采用显式批量并行：将连续的安全工具分组，用 `Promise.all` / `asyncio.gather` 一次性执行：
+对于 OpenAI 后端（不支持流式工具 block 事件），采用显式批量并行：将连续的安全工具分组，用 `asyncio.gather` 一次性执行：
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// agent.ts — OpenAI 并行执行
-
-// 将连续的并发安全工具分组为批次
-type OAIBatch = { concurrent: boolean; items: OAIChecked[] };
-const oaiBatches: OAIBatch[] = [];
-for (const ct of oaiChecked) {
-  const safe = ct.allowed && CONCURRENCY_SAFE_TOOLS.has(ct.fnName);
-  if (safe && oaiBatches.length > 0 && oaiBatches[oaiBatches.length - 1].concurrent) {
-    oaiBatches[oaiBatches.length - 1].items.push(ct);
-  } else {
-    oaiBatches.push({ concurrent: safe, items: [ct] });
-  }
-}
-
-// 执行：并发批次使用 Promise.all
-for (const batch of oaiBatches) {
-  if (batch.concurrent) {
-    const results = await Promise.all(
-      batch.items.map(async (ct) => {
-        const raw = await this.executeToolCall(ct.fnName, ct.input);
-        return { ct, res: this.persistLargeResult(ct.fnName, raw) };
-      })
-    );
-    // ... 推入结果
-  } else {
-    // 非安全工具顺序执行
-  }
-}
-```
-#### **Python**
+#### Python
 ```python
 # agent.py — OpenAI 并行执行
 
 # 将连续的并发安全工具分组为批次
 oai_batches: list[dict] = []
 for ct in oai_checked:
-    safe = ct["allowed"] and ct["fn_name"] in CONCURRENCY_SAFE_TOOLS
+    safe = ct["allowed"] and ct["fn"] in CONCURRENCY_SAFE_TOOLS
     if safe and oai_batches and oai_batches[-1]["concurrent"]:
         oai_batches[-1]["items"].append(ct)
     else:
@@ -627,21 +418,22 @@ for ct in oai_checked:
 for batch in oai_batches:
     if batch["concurrent"]:
         async def _exec(ct):
-            raw = await self._execute_tool_call(ct["fn_name"], ct["input"])
-            return {"ct": ct, "res": self._persist_large_result(ct["fn_name"], raw)}
+            raw = await self._execute_tool_call(ct["fn"], ct["inp"])
+            return {"ct": ct, "res": self._persist_large_result(ct["fn"], raw)}
         results = await asyncio.gather(*[_exec(ct) for ct in batch["items"]])
         # ... 推入结果
     else:
         # 非安全工具顺序执行
 ```
-<!-- tabs:end -->
 
 两种后端的并行策略对比：
 
 - **Anthropic 后端**：流式执行自动处理并行——工具 block 完整时立即启动，多个工具的执行时间自然重叠
-- **OpenAI 后端**：响应完成后显式分批——将连续的安全工具归入同一批次，用 `Promise.all` 并行执行
+- **OpenAI 后端**：响应完成后显式分批——将连续的安全工具归入同一批次，用 `asyncio.gather` 并行执行
 - **混合序列保持安全**：`[read, read, write, read]` 会被分为 `[read||read]`、`[write]`、`[read]` 三个批次，写操作前后的工具各自独立，不会跨越写操作并行
 - **典型加速效果**：当模型在一次响应中读取 3-5 个文件时，并行执行通常带来 2-3 倍的速度提升
+
+Anthropic 和 OpenAI 的目标一样：减少等待时间。但两者减少等待的时机不同。Anthropic 是“边生成边启动”，更早；OpenAI 是“生成完后批量执行”，更保守。OpenAI 的分批逻辑天然保留了工具顺序屏障：安全工具只和前后连续的安全工具并行，不会跨过写操作。Anthropic 的提前执行更激进，因此需要依赖 `CONCURRENCY_SAFE_TOOLS` 和权限检查控制风险。
 
 ## 简化对比
 
@@ -650,9 +442,17 @@ for batch in oai_batches:
 | **后端支持** | 仅 Anthropic | Anthropic + OpenAI 兼容 |
 | **重试策略** | 类似指数退避 | 指数退避 + 随机抖动 |
 | **Thinking 处理** | 深度集成，独立展示与折叠 | 基础支持，过滤 thinking blocks |
-| **流式工具执行** | StreamingToolExecutor 独立模块，全量事件处理 | 回调 + earlyExecutions Map，精简实现 |
-| **并行工具执行** | 完整的并发调度器 | Anthropic 流式提前执行 + OpenAI 批量 Promise.all |
+| **流式工具执行** | StreamingToolExecutor 独立模块，全量事件处理 | 回调 + `early_executions` 字典，精简实现 |
+| **并行工具执行** | 完整的并发调度器 | Anthropic 流式提前执行 + OpenAI 批量 `asyncio.gather` |
 
 ---
 
 > **下一章**：Agent 能操作文件和执行命令了，但我们需要防止它做危险的事——权限系统保护你的系统。
+
+## 本章小结：流式输出为什么不只是“显示更快”
+
+流式输出表面上是逐字显示，真正的价值是降低等待焦虑，并让用户更早发现方向是否跑偏。模型生成长回答或多个工具调用时，如果终端一直空白，用户很难判断程序是卡住了还是还在工作；流式输出让用户能持续看到进展。
+
+实现上，Anthropic 后端使用 SDK 的 stream 接口，`_call_anthropic_stream()` 监听文本增量并调用 `_emit_text()` 输出。OpenAI 兼容后端没有完全相同的消息结构，所以 `_call_openai_stream()` 手动累积 `delta.content` 和 tool call 参数。两套后端最后都要还原成统一的“助手消息 + 工具调用”形式，方便主循环继续处理。
+
+流式还和工具执行有关。Anthropic 流式过程中，某个安全工具的完整 block 一旦结束，就可以提前执行，不必等模型整段响应结束。这个优化对 `read_file`、`grep_search` 这类只读工具尤其有用。相关概念是并发安全：只有无副作用工具才适合提前或并行执行，写文件和 shell 命令仍然要谨慎。

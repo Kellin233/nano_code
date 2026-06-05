@@ -1,12 +1,14 @@
-# 1. Agent Loop — 核心循环
+# 1. 智能体循环：让模型自己决定下一步
 
 ## 本章目标
 
-实现 coding agent 的心脏：一个 while 循环，不断调用 LLM → 检查是否需要执行工具 → 执行工具 → 把结果喂回 LLM → 重复，直到 LLM 认为任务完成。
+实现编程智能体的心脏：一个 `while True` 循环，不断调用模型 → 检查是否需要执行工具 → 执行工具 → 把结果喂回模型 → 重复，直到模型不再请求工具。
+
+读这一章时，先记住一句话：**代码不负责判断任务是否完成，模型负责判断；代码只负责把模型的决定安全地执行出来。** 这也是智能体和普通脚本最大的区别。
 
 ```mermaid
 graph TB
-    subgraph Agent Loop
+    subgraph 智能体循环
         A[用户消息] --> B[调用 LLM API]
         B --> C{响应包含<br/>tool_use?}
         C -->|是| D[执行工具]
@@ -23,7 +25,7 @@ graph TB
 
 ### 双层架构
 
-Claude Code 把 Agent Loop 拆成两层：
+Claude Code 把智能体循环拆成两层：
 
 - **QueryEngine**（~1155 行）：会话级，管整个对话生命周期——用户输入处理、USD 预算检查、Token 统计、会话恢复
 - **queryLoop**（~1728 行）：单轮级，管一次查询的执行——消息压缩、API 调用、工具执行、错误恢复
@@ -64,7 +66,7 @@ queryLoop 签名是 `async function*`——异步生成器。选这个而不是�
 Claude Code 用 `StreamingToolExecutor` 在 API 流式响应期间并行执行工具：
 
 ```
-串行（我们的实现）：
+串行：
   [========= API 流式响应 =========][tool1][tool2][tool3]
 
 并行（Claude Code）：
@@ -77,82 +79,13 @@ Claude Code 用 `StreamingToolExecutor` 在 API 流式响应期间并行执行�
 
 ## 我们的实现
 
-把双层架构合并成一个 `Agent` 类，核心是 `chatAnthropic()` 方法：
+当前仓库把双层架构合并成一个 `Agent` 类。对外入口是 `chat()`，它先做 MCP 懒连接，再根据后端选择 `_chat_anthropic()` 或 `_chat_openai()`。这两个方法长得不完全一样，因为两家 API 的工具消息格式不同，但循环结构一样。
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-// agent.ts — chatAnthropic 方法（核心 Agent Loop）
+如果你只想先理解主干，建议先看 `mini_claude/agent.py` 里的 `_chat_anthropic()`：Anthropic 的 `tool_use` / `tool_result` 结构更直观，也最接近 Claude Code 的原始形态。
 
-private async chatAnthropic(userMessage: string): Promise<void> {
-  this.anthropicMessages.push({ role: "user", content: userMessage });
-  // 在 turn boundary 触发 auto-compact：此时最后一条消息是纯文本 user，
-  // compactAnthropic 内部的 slice(0, -1) 不会切断 tool_use ↔ tool_result 配对（详见第 7 章）
-  await this.checkAndCompact();
-
-  while (true) {
-    if (this.abortController?.signal.aborted) break;
-
-    const response = await this.callAnthropicStream();
-
-    // 累计 token 用量
-    this.totalInputTokens += response.usage.input_tokens;
-    this.totalOutputTokens += response.usage.output_tokens;
-    this.lastInputTokenCount = response.usage.input_tokens;
-
-    // 提取 tool_use block
-    const toolUses: Anthropic.ToolUseBlock[] = [];
-    for (const block of response.content) {
-      if (block.type === "tool_use") toolUses.push(block);
-    }
-
-    // assistant 响应推入历史
-    this.anthropicMessages.push({ role: "assistant", content: response.content });
-
-    // 没有工具调用 → 任务完成
-    if (toolUses.length === 0) {
-      printCost(this.totalInputTokens, this.totalOutputTokens);
-      break;
-    }
-
-    // 串行执行每个工具
-    const toolResults: Anthropic.ToolResultBlockParam[] = [];
-    for (const toolUse of toolUses) {
-      if (this.abortController?.signal.aborted) break;
-
-      const input = toolUse.input as Record<string, any>;
-      printToolCall(toolUse.name, input);
-
-      // 权限检查（详见第 6 章）
-      const perm = checkPermission(toolUse.name, input, this.permissionMode, this.planFilePath);
-      if (perm.action === "deny") {
-        toolResults.push({ type: "tool_result", tool_use_id: toolUse.id,
-          content: `Action denied: ${perm.message}` });
-        continue;
-      }
-      if (perm.action === "confirm" && perm.message && !this.confirmedPaths.has(perm.message)) {
-        const confirmed = await this.confirmDangerous(perm.message);
-        if (!confirmed) {
-          toolResults.push({ type: "tool_result", tool_use_id: toolUse.id,
-            content: "User denied this action." });
-          continue;
-        }
-        this.confirmedPaths.add(perm.message);
-      }
-
-      const result = await executeTool(toolUse.name, input);
-      printToolResult(toolUse.name, result);
-      toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: result });
-    }
-
-    // 工具结果以 user 消息推入（Anthropic API 要求）
-    this.anthropicMessages.push({ role: "user", content: toolResults });
-  }
-}
-```
-#### **Python**
+#### Python
 ```python
-# agent.py — _chat_anthropic 方法（核心 Agent Loop）
+# agent.py — _chat_anthropic 方法（核心智能体循环）
 
 async def _chat_anthropic(self, user_message: str) -> None:
     self._anthropic_messages.append({"role": "user", "content": user_message})
@@ -211,11 +144,40 @@ async def _chat_anthropic(self, user_message: str) -> None:
 
         self._anthropic_messages.append({"role": "user", "content": tool_results})
 ```
-<!-- tabs:end -->
+
+这段代码有 4 个读点：
+
+1. **用户消息先进历史**：`append({"role": "user", ...})` 不是为了保存聊天记录而已，下一次 API 调用会把这个数组整体发给模型。
+2. **压缩只在回合边界做**：`_check_and_compact()` 放在工具循环开始前，避免切断 `tool_use` 和 `tool_result` 的配对。这个细节在第 7 章会展开。
+3. **工具调用先进入 assistant 消息**：模型说“我要调用工具”本身也是上下文，必须保存。否则下一轮模型只看到工具结果，看不到自己为什么调用它。
+4. **工具结果伪装成 user 消息**：这是 Anthropic API 的协议要求。它不是用户真的说了一句话，而是系统把观察结果交还给模型。
+
+### 一次请求的真实轨迹
+
+假设你输入：
+
+```text
+帮我看看 README 里有没有错别字
+```
+
+代码里的轨迹大致是这样：
+
+1. `__main__.py` 的 `run_repl()` 读到这一行，调用 `await agent.chat(...)`。
+2. `agent.chat()` 确认 MCP 是否已连接，然后进入 `_chat_anthropic()`。
+3. `_chat_anthropic()` 把用户消息放进 `_anthropic_messages`。
+4. `_call_anthropic_stream()` 调 API，模型返回 `read_file` 或 `grep_search` 的 `tool_use`。
+5. `_execute_tool_call()` 统一处理特殊工具、MCP 工具、技能工具，最后普通工具会落到 `tools.execute_tool()`。
+6. 工具结果作为 `tool_result` 放回 `_anthropic_messages`。
+7. 循环再次调用模型。模型这次看到了 README 内容，可能继续调用 `edit_file`，也可能直接回答“没有发现明显问题”。
+8. 当响应里没有工具调用时，循环结束，`chat()` 打印分隔线并自动保存会话。
+
+这就是项目里所有高级能力的底座。记忆、技能、MCP、子智能体都不是另一套系统，它们只是让第 4 步“模型能看到什么、能调用什么”变得更丰富。
 
 ### 消息数组的增长方式
 
-理解 Agent Loop 的关键：消息数组是怎么增长的。
+理解智能体循环的关键：消息数组是怎么增长的。
+
+消息数组可以理解为模型的“短期工作记忆”。每次 API 调用并不是只发送最新一句用户输入，而是把当前会话中仍然保留的消息一起发过去。模型之所以能继续上一轮的操作，是因为它能看到自己刚才调用了什么工具、工具返回了什么结果，以及用户最初要解决什么问题。
 
 ```
 第 1 轮:
@@ -241,27 +203,13 @@ async def _chat_anthropic(self, user_message: str) -> None:
 
 每轮循环消息数组增长两条：一条 assistant，一条 user（工具结果）。模型每次都能看到完整历史，这是它能"记住"之前做过什么的原因。工具结果用 `role: "user"` 推入是 Anthropic API 的协议要求，结果必须通过 `tool_use_id` 关联回对应的调用。
 
-### AbortController：优雅中断
+这里有一个容易忽略的实现细节：工具调用本身也必须保存到 assistant 消息里。否则下一轮模型只看到“工具返回了文件内容”，却看不到“这个文件内容是因为什么工具调用得到的”。Anthropic 通过 `tool_use_id` 把工具调用和工具结果配对，OpenAI 兼容后端则用 `tool_call_id` 配对。两套协议名字不同，但目的相同：让模型知道哪个结果对应哪个调用。
 
-<!-- tabs:start -->
-#### **TypeScript**
-```typescript
-async chat(userMessage: string): Promise<void> {
-  this.abortController = new AbortController();
-  try {
-    await this.chatAnthropic(userMessage);
-  } finally {
-    this.abortController = null;
-  }
-  printDivider();
-  this.autoSave();
-}
+这也是为什么第 7 章的上下文压缩不能随便删消息。如果删掉一个工具结果，却留下对应的工具调用，API 会认为消息历史不合法；如果删掉工具调用，却留下工具结果，模型也会失去因果关系。Agent Loop 看起来只是 while 循环，实际上它还在维护一份严格的消息协议。
 
-abort() {
-  this.abortController?.abort();
-}
-```
-#### **Python**
+### 中断：让当前任务停下来
+
+#### Python
 ```python
 async def chat(self, user_message: str) -> None:
     self._aborted = False
@@ -279,10 +227,17 @@ async def chat(self, user_message: str) -> None:
 def abort(self) -> None:
     self._aborted = True
 ```
-<!-- tabs:end -->
 
-`AbortController` 是标准的中断机制：`abort()` 被调用后 signal 变为 `aborted`，循环在下一个检查点退出。signal 同时传给 API 调用，确保网络请求也能被取消。
+当前 Python 版没有实现浏览器/Node 风格的 `AbortController`，而是用 `_aborted` 布尔值做轻量中断。`Ctrl+C` 会调用 `agent.abort()`，循环在下一次检查 `self._aborted` 时退出。它的好处是实现简单；限制是正在等待的 API 请求无法立即从网络层取消，只能等请求返回后停止后续工具执行。
 
 ---
 
 > **下一章**：循环的核心动力是工具——没有工具，LLM 只是一个聊天机器人。我们来看工具系统的实现。
+
+## 本章小结：为什么循环是整个项目的中心
+
+智能体循环的作用，是把一次用户请求拆成多次“模型判断”。普通聊天应用通常只调用一次模型；但编程任务不是一次回答就能完成的。模型可能先读文件，再搜索引用，再修改代码，再运行测试，最后根据测试结果继续修复。这个过程必须靠循环完成。
+
+代码里的实现点在 `_chat_anthropic()` 和 `_chat_openai()`。它们都维护一份消息历史：用户消息、助手文本、工具调用、工具结果都会按协议放进去。下一次调用模型时，模型能看到前面发生过什么，所以它可以基于工具结果继续决策。
+
+这个循环有一个非常关键的边界：**退出条件是“模型没有再调用工具”**。代码并不知道“bug 是否真的修好”，它只知道模型这轮返回的是最终文本还是新的工具调用。测试、搜索、编辑这些判断都由模型通过工具结果来推理。理解这一点，后面工具、权限、上下文压缩就都能串起来。
