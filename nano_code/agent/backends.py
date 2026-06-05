@@ -22,7 +22,7 @@ import time
 from typing import Any
 
 from .models import _get_max_output_tokens, _to_openai_tools, _with_retry
-from ..tools import CONCURRENCY_SAFE_TOOLS, check_permission
+from ..tools import check_permission
 from ..ui import (
     print_cost,
     print_info,
@@ -67,9 +67,14 @@ class AgentBackendMixin:
             early_executions: dict[str, asyncio.Task] = {}
 
             def _on_tool_block(block: dict):
-                if block["name"] in CONCURRENCY_SAFE_TOOLS:
-                    perm = check_permission(block["name"], block["input"], self.permission_mode)
-                    if perm["action"] == "allow":
+                if self._tool_registry.is_concurrency_safe(block["name"], block["input"]):
+                    perm = check_permission(
+                        block["name"],
+                        block["input"],
+                        mode=self.permission_mode,
+                        metadata=self._tool_registry.metadata_for(block["name"]),
+                    )
+                    if perm.action == "allow":
                         task = asyncio.create_task(self._execute_tool_call(block["name"], block["input"]))
                         early_executions[block["id"]] = task
 
@@ -116,17 +121,22 @@ class AgentBackendMixin:
                     tool_results.append({"type": "tool_result", "tool_use_id": tool_use.id, "content": res})
                     continue
 
-                perm = check_permission(tool_use.name, inp, self.permission_mode)
-                if perm["action"] == "deny":
-                    print_info(f"Denied: {perm.get('message', '')}")
-                    tool_results.append({"type": "tool_result", "tool_use_id": tool_use.id, "content": f"Action denied: {perm.get('message', '')}"})
+                perm = check_permission(
+                    tool_use.name,
+                    inp,
+                    mode=self.permission_mode,
+                    metadata=self._tool_registry.metadata_for(tool_use.name),
+                )
+                if perm.action == "deny":
+                    print_info(f"Denied: {perm.message}")
+                    tool_results.append({"type": "tool_result", "tool_use_id": tool_use.id, "content": f"Action denied: {perm.message}"})
                     continue
-                if perm["action"] == "confirm" and perm.get("message") and perm["message"] not in self._confirmed_paths:
-                    confirmed = await self._confirm_dangerous(perm["message"])
+                if perm.action == "confirm" and perm.message and perm.message not in self._confirmed_paths:
+                    confirmed = await self._confirm_dangerous(perm.message)
                     if not confirmed:
                         tool_results.append({"type": "tool_result", "tool_use_id": tool_use.id, "content": "User denied this action."})
                         continue
-                    self._confirmed_paths.add(perm["message"])
+                    self._confirmed_paths.add(perm.message)
 
                 raw = await self._execute_tool_call(tool_use.name, inp)
                 res = self._persist_large_result(tool_use.name, raw)
@@ -282,23 +292,28 @@ class AgentBackendMixin:
 
                 print_tool_call(fn_name, inp)
 
-                perm = check_permission(fn_name, inp, self.permission_mode)
-                if perm["action"] == "deny":
-                    print_info(f"Denied: {perm.get('message', '')}")
-                    oai_checked.append({"tc": tool_call, "fn": fn_name, "inp": inp, "allowed": False, "result": f"Action denied: {perm.get('message', '')}"})
+                perm = check_permission(
+                    fn_name,
+                    inp,
+                    mode=self.permission_mode,
+                    metadata=self._tool_registry.metadata_for(fn_name),
+                )
+                if perm.action == "deny":
+                    print_info(f"Denied: {perm.message}")
+                    oai_checked.append({"tc": tool_call, "fn": fn_name, "inp": inp, "allowed": False, "result": f"Action denied: {perm.message}"})
                     continue
-                if perm["action"] == "confirm" and perm.get("message") and perm["message"] not in self._confirmed_paths:
-                    confirmed = await self._confirm_dangerous(perm["message"])
+                if perm.action == "confirm" and perm.message and perm.message not in self._confirmed_paths:
+                    confirmed = await self._confirm_dangerous(perm.message)
                     if not confirmed:
                         oai_checked.append({"tc": tool_call, "fn": fn_name, "inp": inp, "allowed": False, "result": "User denied this action."})
                         continue
-                    self._confirmed_paths.add(perm["message"])
+                    self._confirmed_paths.add(perm.message)
                 oai_checked.append({"tc": tool_call, "fn": fn_name, "inp": inp, "allowed": True})
 
             # 阶段 2：连续的只读安全工具并行执行，其余保持串行。
             oai_batches: list[dict] = []
             for checked in oai_checked:
-                safe = checked["allowed"] and checked["fn"] in CONCURRENCY_SAFE_TOOLS
+                safe = checked["allowed"] and self._tool_registry.is_concurrency_safe(checked["fn"], checked["inp"])
                 if safe and oai_batches and oai_batches[-1]["concurrent"]:
                     oai_batches[-1]["items"].append(checked)
                 else:

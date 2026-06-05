@@ -7,7 +7,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from .frontmatter import parse_frontmatter
-from .tools import tool_definitions, ToolDef
+from .tools.definitions import builtin_tool_definitions
+from .tools.types import ToolDef
 
 # ─── 只读工具（供探索和规划智能体使用）──────────
 # Explore / Plan 子智能体只拿到这三个工具的 schema。
@@ -129,17 +130,18 @@ def _load_agents_from_dir(directory: Path, agents: dict[str, dict]) -> None:
 
 def get_sub_agent_config(agent_type: str) -> dict:
     """返回指定智能体类型对应的配置字典。"""
+    tools = builtin_tool_definitions()
     custom = _discover_custom_agents().get(agent_type)
     if custom:
         if custom["allowed_tools"]:
             # 自定义智能体声明 allowed-tools 时严格按白名单过滤。
-            tools = [t for t in tool_definitions if t["name"] in custom["allowed_tools"]]
+            selected = [t for t in tools if t["name"] in custom["allowed_tools"]]
         else:
             # 未声明白名单时给它普通工具，但仍排除 agent，避免 A→B→C 的递归派生。
-            tools = [t for t in tool_definitions if t["name"] != "agent"]
-        return {"system_prompt": custom["system_prompt"], "tools": tools}
+            selected = [t for t in tools if t["name"] != "agent"]
+        return {"system_prompt": custom["system_prompt"], "tools": selected}
 
-    read_only = [t for t in tool_definitions if t["name"] in READ_ONLY_TOOLS]
+    read_only = [t for t in tools if t["name"] in READ_ONLY_TOOLS]
 
     if agent_type == "explore":
         return {"system_prompt": EXPLORE_PROMPT, "tools": read_only}
@@ -147,7 +149,7 @@ def get_sub_agent_config(agent_type: str) -> dict:
         return {"system_prompt": PLAN_PROMPT, "tools": read_only}
     else:  # 通用类型
         # 未知类型回退到 general：最大化可用性，但仍禁止子智能体再创建子智能体。
-        return {"system_prompt": GENERAL_PROMPT, "tools": [t for t in tool_definitions if t["name"] != "agent"]}
+        return {"system_prompt": GENERAL_PROMPT, "tools": [t for t in tools if t["name"] != "agent"]}
 
 
 # ─── 可用智能体类型（用于系统提示词）──────────────

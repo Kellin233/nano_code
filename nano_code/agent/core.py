@@ -55,14 +55,7 @@ from ..mcp_client import McpManager
 from ..prompt import build_system_prompt
 from ..session import save_session
 from ..skill import ActiveSkillManager, SkillInvocation
-from ..tools import (
-    CONCURRENCY_SAFE_TOOLS,
-    ToolDef,
-    check_permission,
-    execute_tool,
-    get_active_tool_definitions,
-    tool_definitions,
-)
+from ..tools import ToolDef, ToolRegistry, builtin_tool_definitions
 from ..ui import print_assistant_text, print_divider, print_info
 
 
@@ -104,7 +97,8 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
 
         # 子智能体复用同一个 Agent 类，只是换系统提示词、工具集和 UI 行为。
         self.is_sub_agent = is_sub_agent
-        self.tools = custom_tools or tool_definitions
+        base_tools = custom_tools if custom_tools is not None else builtin_tool_definitions()
+        self._tool_registry = ToolRegistry(base_tools)
         self.max_cost_usd = max_cost_usd
         self.max_turns = max_turns
         self.confirm_fn = confirm_fn
@@ -151,7 +145,9 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
         self._openai_messages: list[dict] = []
 
         # custom_system_prompt 是多 Agent 的关键入口。
-        self._base_system_prompt = custom_system_prompt or build_system_prompt()
+        self._base_system_prompt = custom_system_prompt or build_system_prompt(
+            deferred_tool_names=self._tool_registry.deferred_names()
+        )
         self._system_prompt = self._base_system_prompt
 
         # 初始化客户端。OpenAI-compatible 后端需要 system message 进入消息历史。
@@ -202,7 +198,11 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
                 await self._mcp_manager.load_and_connect()
                 mcp_defs = self._mcp_manager.get_tool_definitions()
                 if mcp_defs:
-                    self.tools = self.tools + mcp_defs
+                    self._tool_registry.add_many(
+                        mcp_defs,
+                        origin="mcp",
+                        default_concurrency_safe=False,
+                    )
             except Exception as e:
                 print(f"[mcp] Init failed: {e}", flush=True)
 

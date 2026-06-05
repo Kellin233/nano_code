@@ -11,7 +11,7 @@ import sys
 from .agent import Agent
 from .ui import print_welcome, print_user_prompt, print_error, print_info
 from .session import load_session, get_latest_session_id
-from .memory import list_memories
+from .memory.store import list_memories
 from .skill import discover_skills, get_skill_by_name
 
 

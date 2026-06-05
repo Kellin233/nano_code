@@ -19,7 +19,9 @@ from __future__ import annotations
 
 import time
 
-from ..memory import MemoryPrefetch, format_memories_for_injection, start_memory_prefetch
+from ..memory.retrieval import MemoryPrefetch, start_memory_prefetch
+from ..memory.rendering import format_memories_for_injection
+from ..memory.store import mark_accessed
 from ..ui import print_info
 
 
@@ -112,8 +114,9 @@ class AgentContextMixin:
             for memory in memories:
                 self._already_surfaced_memories.add(memory.path)
                 self._session_memory_bytes += len(memory.content.encode())
+            mark_accessed([memory.path for memory in memories])
         except Exception:
-            pass  # 预取错误已在 memory.py 中记录；主循环不应因此中断。
+            pass  # 预取错误已在 memory.retrieval 中记录；主循环不应因此中断。
 
     def _append_user_context(self, text: str) -> None:
         """把系统补充上下文追加到最新用户消息，保持消息角色交替合法。"""

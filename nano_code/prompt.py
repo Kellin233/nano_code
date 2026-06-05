@@ -8,10 +8,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .memory import build_memory_prompt_section
+from .memory.rendering import build_memory_prompt_section
 from .skill import build_skill_descriptions
 from .subagent import build_agent_descriptions
-from .tools import get_deferred_tool_names
 
 # ─── 系统提示词模板（内嵌）──────────────────────
 
@@ -207,7 +206,7 @@ def get_git_context() -> str:
         return ""
 
 
-def build_system_prompt() -> str:
+def build_system_prompt(deferred_tool_names: list[str] | None = None) -> str:
     """根据内嵌模板和动态上下文构建完整系统提示词。"""
     from datetime import date
     today = date.today().isoformat()
@@ -219,7 +218,7 @@ def build_system_prompt() -> str:
     skills_section = build_skill_descriptions()
     agent_section = build_agent_descriptions()
 
-    deferred_names = get_deferred_tool_names()
+    deferred_names = deferred_tool_names or []
     deferred_section = (
         f"\n\nThe following deferred tools are available via tool_search: {', '.join(deferred_names)}. Use tool_search to fetch their full schemas when needed."
         if deferred_names else ""

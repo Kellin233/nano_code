@@ -4,23 +4,24 @@
 它位于模型后端循环和底层工具实现之间：
 
 - `backends.py` 解析出 tool call 后，会调用这里的 `_execute_tool_call()`。
-- 普通无状态工具最终转发到 `../tools.py`。
+- 普通内置工具最终转发到 `tools.runtime`。
 - 需要 Agent 当前状态的能力留在这里处理，例如 skill、sub-agent、MCP。
 
-为什么不全放进 `tools.py`：
-- `tools.py` 应保持尽量无状态，方便测试和复用。
+为什么不全放进 `tools.runtime`：
+- tools 包应保持清晰边界，方便测试和复用。
 - skill/sub-agent/MCP 需要访问当前 Agent 的模型、权限、token、消息状态。
 - 大结果持久化和危险操作确认也依赖当前会话语义。
 """
 
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 
 from ..skill import SkillInvocationResult
 from ..subagent import get_available_agent_types, get_sub_agent_config
-from ..tools import ToolDef, execute_tool, get_active_tool_definitions
+from ..tools import ToolDef, execute_builtin_tool
 from ..ui import print_confirmation, print_sub_agent_end, print_sub_agent_start
 
 
@@ -28,7 +29,7 @@ class AgentToolRuntimeMixin:
     """给 `Agent` 增加工具执行和派生任务能力。
 
     依赖 `Agent` 上的状态：
-    `tools`、`permission_mode`、`_read_file_state`、`_mcp_manager`、
+    `_tool_registry`、`permission_mode`、`_read_file_state`、`_mcp_manager`、
     `_skill_invocation`、`_active_skills`、token 计数和输出 buffer。
 
     提供给后端循环使用的方法：
@@ -38,8 +39,7 @@ class AgentToolRuntimeMixin:
 
     def _current_tool_definitions(self) -> list[ToolDef]:
         denied = self._active_skills.disallowed_tools()
-        tools = [t for t in self.tools if t["name"] not in denied] if denied else self.tools
-        return get_active_tool_definitions(tools)
+        return self._tool_registry.active_definitions(denied=denied)
 
     # ─── 大结果持久化 ─────────────────────────────────
 
@@ -73,9 +73,17 @@ class AgentToolRuntimeMixin:
             return await self._execute_agent_tool(inp)
         if name == "skill":
             return await self._execute_skill_tool(inp)
+        if name == "tool_search":
+            return self._execute_tool_search(inp)
         if self._mcp_manager.is_mcp_tool(name):
             return await self._mcp_manager.call_tool(name, inp)
-        return await execute_tool(name, inp, self._read_file_state)
+        return await execute_builtin_tool(name, inp, self._read_file_state)
+
+    def _execute_tool_search(self, inp: dict) -> str:
+        matches = self._tool_registry.search_deferred(inp.get("query", ""))
+        if not matches:
+            return "No matching deferred tools found."
+        return json.dumps(matches, indent=2)
 
     # ─── 技能派生模式 ───────────────────────────────
 

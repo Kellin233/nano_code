@@ -20,7 +20,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from ..tools import ToolDef
+from ..tools.types import ToolDef
 from ..ui import print_retry
 
 
