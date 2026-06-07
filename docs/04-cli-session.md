@@ -1,5 +1,7 @@
 # 4. CLI 与会话
 
+> Current status: `/plan` 和 `--plan` 已从当前源码删除。本文中 Plan Mode 相关内容属于历史设计记录；当前只保留 `plan` 子 agent 作为只读规划能力。
+
 ## 本章目标
 
 构建用户接口层：命令行参数解析、交互式 REPL、Ctrl+C 中断处理、会话持久化和恢复。

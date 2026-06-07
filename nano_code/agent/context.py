@@ -140,6 +140,65 @@ class AgentContextMixin:
         else:
             self._anthropic_messages.append({"role": "user", "content": text})
 
+    def _append_meta_user_message(self, text: str) -> None:
+        """追加独立的系统上下文 user 消息，不混入真实用户输入。"""
+        if not text:
+            return
+        if self.use_openai:
+            self._openai_messages.append({"role": "user", "content": text})
+        else:
+            self._anthropic_messages.append({"role": "user", "content": text})
+
+    def _inject_startup_context_once(self) -> None:
+        if getattr(self, "_startup_context_injected", False):
+            return
+        context = getattr(self, "_startup_context", "")
+        if context:
+            self._append_meta_user_message(context)
+        self._startup_context_injected = True
+
+    def _queue_context_attachment(self, text: str) -> None:
+        if not text or not text.strip():
+            return
+        self._pending_context_attachments.append(text)
+
+    def _flush_pending_context_attachments(self) -> None:
+        if not self._pending_context_attachments:
+            return
+        combined = "\n\n".join(self._pending_context_attachments)
+        self._pending_context_attachments.clear()
+        self._append_meta_user_message(combined)
+
+    def _prepare_initial_context_attachments(self) -> None:
+        if getattr(self, "_initial_context_attachments_prepared", False):
+            return
+        self._initial_context_attachments_prepared = True
+
+        if not self.is_sub_agent:
+            try:
+                from ..context.attachments import render_skill_listing_attachment
+                from ..skill import discover_skills
+
+                attachment, sent = render_skill_listing_attachment(
+                    discover_skills(),
+                    self._sent_skill_names,
+                )
+                self._sent_skill_names = sent
+                self._queue_context_attachment(attachment)
+            except Exception:
+                pass
+
+        try:
+            from ..context.attachments import render_deferred_tools_attachment
+
+            denied = self._active_skills.disallowed_tools()
+            names = self._tool_registry.deferred_names(denied=denied)
+            unseen = [name for name in names if name not in self._sent_deferred_tool_names]
+            self._sent_deferred_tool_names.update(unseen)
+            self._queue_context_attachment(render_deferred_tools_attachment(unseen))
+        except Exception:
+            pass
+
     # ─── 自动压缩 ─────────────────────────────────────
 
     async def compact(self) -> None:

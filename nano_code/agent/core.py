@@ -50,13 +50,24 @@ from .models import (
     _to_openai_tools,
     _with_retry,
 )
+from .engine import SessionEngine
+from .events import (
+    AssistantTextDelta,
+    BudgetExceeded,
+    LoopFinished,
+    PermissionRequested,
+    ToolCallFinished,
+    ToolCallStarted,
+)
 from .tools_runtime import AgentToolRuntimeMixin
+from ..hooks import HookManager
 from ..mcp_client import McpManager
-from ..prompt import build_system_prompt
+from ..prompt import build_prompt_bundle, build_system_prompt
+from ..sandbox import SandboxConfig, SandboxManager
 from ..session import save_session
 from ..skill import ActiveSkillManager, SkillInvocation
 from ..tools import ToolDef, ToolRegistry, builtin_tool_definitions
-from ..ui import print_assistant_text, print_divider, print_info
+from ..ui import print_assistant_text, print_cost, print_divider, print_info, print_tool_call, print_tool_result
 
 
 # 兼容旧代码中直接从 nano_code.agent 访问这些私有 helper/常量的用法。
@@ -89,6 +100,8 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
         custom_system_prompt: str | None = None,
         custom_tools: list[ToolDef] | None = None,
         is_sub_agent: bool = False,
+        sandbox_config: SandboxConfig | None = None,
+        sandbox_manager: SandboxManager | None = None,
     ):
         self.permission_mode = permission_mode
         self.thinking = thinking
@@ -105,6 +118,10 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
         self.effective_window = _get_context_window(model) - 20000
         self.session_id = uuid.uuid4().hex[:8]
         self.session_start_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        self._sandbox_manager = sandbox_manager or SandboxManager(
+            sandbox_config,
+            session_id=self.session_id,
+        )
 
         self.total_input_tokens = 0
         self.total_output_tokens = 0
@@ -133,8 +150,11 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
         self._active_skills = ActiveSkillManager()
 
         # MCP 延迟连接：只在主 Agent 第一次 chat 时加载外部工具。
-        self._mcp_manager = McpManager()
+        self._mcp_manager = McpManager(on_tools_changed=self._handle_mcp_tool_delta)
         self._mcp_initialized = False
+
+        # Hooks 在会话启动时快照化；项目级 hooks 默认需要显式信任环境变量。
+        self._hook_manager = HookManager.capture()
 
         # 记忆召回状态：每个用户回合最多进行一次语义预取。
         self._already_surfaced_memories: set[str] = set()
@@ -144,11 +164,28 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
         self._anthropic_messages: list[dict] = []
         self._openai_messages: list[dict] = []
 
+        self._pending_context_attachments: list[str] = []
+        self._sent_skill_names: set[str] = set()
+        self._sent_deferred_tool_names: set[str] = set()
+        self._initial_context_attachments_prepared = False
+
         # custom_system_prompt 是多 Agent 的关键入口。
-        self._base_system_prompt = custom_system_prompt or build_system_prompt(
-            deferred_tool_names=self._tool_registry.deferred_names()
-        )
+        if custom_system_prompt:
+            prompt_bundle = None
+            self._base_system_prompt = custom_system_prompt
+            self._startup_context = ""
+        elif is_sub_agent:
+            prompt_bundle = None
+            self._base_system_prompt = build_system_prompt()
+            self._startup_context = ""
+        else:
+            prompt_bundle = build_prompt_bundle()
+            self._base_system_prompt = prompt_bundle.system_prompt
+            self._startup_context = prompt_bundle.startup_context
         self._system_prompt = self._base_system_prompt
+        self._startup_context_injected = not bool(self._startup_context)
+        self._prompt_diagnostics = [] if prompt_bundle is None else prompt_bundle.diagnostics
+        self._engine = SessionEngine(self)
 
         # 初始化客户端。OpenAI-compatible 后端需要 system message 进入消息历史。
         if self.use_openai:
@@ -188,29 +225,18 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
     def get_token_usage(self) -> dict:
         return {"input": self.total_input_tokens, "output": self.total_output_tokens}
 
+    async def shutdown(self) -> None:
+        await self._mcp_manager.disconnect_all()
+        await self._sandbox_manager.stop()
+
     # ─── 主入口 ────────────────────────────────────────
 
     async def chat(self, user_message: str) -> None:
-        # 首次对话时懒连接 MCP 服务器（仅主智能体）。
-        if not self._mcp_initialized and not self.is_sub_agent:
-            self._mcp_initialized = True
-            try:
-                await self._mcp_manager.load_and_connect()
-                mcp_defs = self._mcp_manager.get_tool_definitions()
-                if mcp_defs:
-                    self._tool_registry.add_many(
-                        mcp_defs,
-                        origin="mcp",
-                        default_concurrency_safe=False,
-                    )
-            except Exception as e:
-                print(f"[mcp] Init failed: {e}", flush=True)
-
         self._aborted = False
-        coro = self._chat_openai(user_message) if self.use_openai else self._chat_anthropic(user_message)
         self._current_task = asyncio.current_task()
         try:
-            await coro
+            async for event in self._engine.submit(user_message):
+                self._render_event(event)
         except asyncio.CancelledError:
             self._aborted = True
         finally:
@@ -218,7 +244,6 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
         if not self.is_sub_agent:
             # 子智能体结果会回到父 Agent，不单独保存会话或打印分隔线。
             print_divider()
-            self._auto_save()
 
     # ─── 子智能体入口 ─────────────────────────────────
 
@@ -246,6 +271,23 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
         else:
             print_assistant_text(text)
 
+    def _render_event(self, event: object) -> None:
+        if isinstance(event, AssistantTextDelta):
+            self._emit_text(event.text)
+        elif isinstance(event, ToolCallStarted):
+            print_tool_call(event.call.name, event.call.input)
+        elif isinstance(event, ToolCallFinished):
+            print_tool_result(event.call.name, event.result.content)
+        elif isinstance(event, PermissionRequested):
+            # `_confirm_dangerous` handles the actual prompt. This event is kept
+            # for non-CLI integrations that consume the event stream directly.
+            pass
+        elif isinstance(event, BudgetExceeded):
+            print_info(f"Budget exceeded: {event.reason}")
+        elif isinstance(event, LoopFinished):
+            if event.stop_reason == "stop" and not self.is_sub_agent:
+                print_cost(self.total_input_tokens, self.total_output_tokens)
+
     # ─── 交互命令和预算 ───────────────────────────────
 
     def clear_history(self) -> None:
@@ -254,6 +296,11 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
         if self.use_openai:
             self._openai_messages.append({"role": "system", "content": self._system_prompt})
         self._active_skills.clear()
+        self._startup_context_injected = not bool(self._startup_context)
+        self._pending_context_attachments.clear()
+        self._sent_skill_names.clear()
+        self._sent_deferred_tool_names.clear()
+        self._initial_context_attachments_prepared = False
         self.total_input_tokens = 0
         self.total_output_tokens = 0
         self.last_input_token_count = 0
@@ -282,6 +329,8 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
             self._anthropic_messages = data["anthropicMessages"]
         if data.get("openaiMessages"):
             self._openai_messages = data["openaiMessages"]
+        if self._anthropic_messages or len(self._openai_messages) > (1 if self.use_openai else 0):
+            self._startup_context_injected = True
         print_info(f"Session restored ({self._get_message_count()} messages).")
 
     def _get_message_count(self) -> int:
@@ -300,5 +349,27 @@ class Agent(AgentContextMixin, AgentToolRuntimeMixin, AgentBackendMixin):
                 "anthropicMessages": self._anthropic_messages if not self.use_openai else None,
                 "openaiMessages": self._openai_messages if self.use_openai else None,
             })
+        except Exception:
+            pass
+
+    def _handle_mcp_tool_delta(self, delta, definitions: list[dict]) -> None:
+        removed = set(getattr(delta, "removed", []) or [])
+        changed = set(getattr(delta, "changed", []) or [])
+        added = set(getattr(delta, "added", []) or [])
+        if removed:
+            self._tool_registry.remove_many(removed)
+            self._sent_deferred_tool_names.difference_update(removed)
+        wanted = added | changed
+        if wanted:
+            self._tool_registry.replace_many(
+                [definition for definition in definitions if definition.get("name") in wanted],
+                origin="mcp",
+                default_concurrency_safe=False,
+            )
+            self._sent_deferred_tool_names.difference_update(wanted)
+        try:
+            from ..context.attachments import render_mcp_delta_attachment
+
+            self._queue_context_attachment(render_mcp_delta_attachment(delta))
         except Exception:
             pass

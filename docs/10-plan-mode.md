@@ -1,5 +1,7 @@
 # 10. Plan Mode：只读规划模式
 
+> Deprecated: 当前源码已删除“全局 Plan Mode 工作流”，只保留 `subagent.py` 中的 `plan` 子 agent 作为只读规划能力。本文保留为历史设计记录，不代表当前可用功能。新的总体重构方案见 `remake/design/total.md`，删除原因见 `remake/design/plan_mode.md`。
+
 ## 本章目标
 
 实现 Plan Mode：让 Agent 先制定计划再执行，避免盲目修改代码。包含模式切换、plan 文件持久化、权限联动和 4 选项审批工作流。

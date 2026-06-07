@@ -152,7 +152,10 @@ def grep_search(inp: dict) -> str:
 
 
 def _grep_python(pattern: str, directory: str, include: str | None) -> str:
-    regex = re.compile(pattern)
+    try:
+        regex = re.compile(pattern)
+    except re.error as exc:
+        return f"Error: invalid regex: {exc}"
     include_pattern = include
     matches: list[str] = []
 

@@ -9,6 +9,7 @@ import signal
 import sys
 
 from .agent import Agent
+from .sandbox import build_sandbox_config
 from .ui import print_welcome, print_user_prompt, print_error, print_info
 from .session import load_session, get_latest_session_id
 from .memory.store import list_memories
@@ -31,6 +32,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true", help="Resume last session")
     parser.add_argument("--max-cost", type=float, default=None, help="Max USD spend")
     parser.add_argument("--max-turns", type=int, default=None, help="Max agentic turns")
+    parser.add_argument(
+        "--sandbox",
+        choices=[
+            "workspace",
+            "read-only",
+            "local",
+            "danger-full-access",
+            "microsandbox",
+            "microsandbox-dev",
+            "microsandbox-safe",
+            "microsandbox-strict",
+        ],
+        default=None,
+        help="Shell sandbox profile",
+    )
+    parser.add_argument("--sandbox-network", choices=["none", "default"], default=None, help="Sandbox network mode")
+    parser.add_argument("--sandbox-image", default=None, help="OCI image for microsandbox mode")
+    parser.add_argument("--sandbox-memory", type=int, default=None, help="Sandbox memory in MiB")
+    parser.add_argument("--sandbox-cpus", type=int, default=None, help="Sandbox vCPU count")
+    parser.add_argument("--sandbox-readonly-workspace", action="store_true", help="Mount the workspace read-only in sandbox")
+    parser.add_argument("--sandbox-no-network", action="store_true", help="Disable networking in sandbox")
+    parser.add_argument("--sandbox-env", action="append", default=None, help="Forward an environment variable into sandbox")
+    parser.add_argument("--sandbox-extra-write", action="append", default=None, help="Allow sandbox writes to an extra host path")
+    parser.add_argument("--sandbox-allow-local-fallback", action="store_true", help="Allow explicit fallback to local when sandbox backend is unavailable")
     parser.add_argument("--help", "-h", action="store_true", help="Show help")
     return parser.parse_args()
 
@@ -169,6 +194,25 @@ Options:
   --resume            Resume the last session
   --max-cost USD      Stop when estimated cost exceeds this amount
   --max-turns N       Stop after N agentic turns
+  --sandbox PROFILE   Shell sandbox profile:
+                      workspace, read-only, local, danger-full-access,
+                      microsandbox-dev, microsandbox-safe, microsandbox-strict
+                      (default: workspace on Linux, local elsewhere)
+  --sandbox-network MODE
+                      Sandbox network mode: none or default (default: none)
+  --sandbox-image IMG OCI image for microsandbox mode (default: python:3.12)
+  --sandbox-memory MiB
+                      Sandbox memory in MiB (default: 2048)
+  --sandbox-cpus N    Sandbox vCPU count (default: 2)
+  --sandbox-readonly-workspace
+                      Mount workspace read-only inside sandbox
+  --sandbox-no-network
+                      Disable networking inside sandbox
+  --sandbox-env NAME  Forward an environment variable into sandbox
+  --sandbox-extra-write PATH
+                      Allow sandbox writes to an extra host path
+  --sandbox-allow-local-fallback
+                      Explicitly fall back to local if sandbox backend is unavailable
   --help, -h          Show this help
 
 REPL commands:
@@ -182,6 +226,8 @@ REPL commands:
 Examples:
   nano-code "fix the bug in nano_code/agent/core.py"
   nano-code --yolo "run all tests and fix failures"
+  nano-code --sandbox workspace "run tests"
+  nano-code --sandbox microsandbox-safe "inspect untrusted project"
   nano-code --max-cost 0.50 --max-turns 20 "implement feature X"
   OPENAI_API_KEY=sk-xxx nano-code --api-base https://aihubmix.com/v1 --model gpt-4o "hello"
   nano-code --resume
@@ -190,6 +236,12 @@ Examples:
         sys.exit(0)
 
     permission_mode = _resolve_permission_mode(args)
+    try:
+        sandbox_config = build_sandbox_config(args)
+    except ValueError as e:
+        print_error(str(e))
+        sys.exit(1)
+
     model = args.model or os.environ.get("NANO_CODE_MODEL", "claude-opus-4-6")
     api_base = args.api_base
 
@@ -232,6 +284,7 @@ Examples:
         api_base=resolved_api_base if resolved_use_openai else None,
         anthropic_base_url=resolved_api_base if not resolved_use_openai else None,
         api_key=resolved_api_key,
+        sandbox_config=sandbox_config,
     )
 
     # 恢复会话
@@ -253,14 +306,26 @@ Examples:
 
     if prompt:
         # 单次执行模式
+        async def run_once() -> None:
+            try:
+                await agent.chat(prompt)
+            finally:
+                await agent.shutdown()
+
         try:
-            asyncio.run(agent.chat(prompt))
+            asyncio.run(run_once())
         except Exception as e:
             print_error(str(e))
             sys.exit(1)
     else:
         # 交互式命令行
-        asyncio.run(run_repl(agent))
+        async def run_interactive() -> None:
+            try:
+                await run_repl(agent)
+            finally:
+                await agent.shutdown()
+
+        asyncio.run(run_interactive())
 
 
 if __name__ == "__main__":

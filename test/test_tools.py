@@ -76,6 +76,53 @@ class PermissionTests(IsolatedToolTest):
         self.assertEqual(decision.action, "deny")
         self.assertEqual(decision.message, "Denied by permission rule for run_shell")
 
+    def test_deny_rules_take_priority_over_bypass_permissions(self) -> None:
+        settings_dir = self.project / ".claude"
+        settings_dir.mkdir()
+        (settings_dir / "settings.json").write_text(json.dumps({
+            "permissions": {
+                "deny": ["run_shell(git push*)"],
+            }
+        }))
+        reset_permission_cache()
+
+        decision = check_permission(
+            "run_shell",
+            {"command": "git push origin main"},
+            mode="bypassPermissions",
+        )
+
+        self.assertEqual(decision.action, "deny")
+
+    def test_mcp_server_level_permission_rule_matches_prefixed_tools(self) -> None:
+        settings_dir = self.project / ".claude"
+        settings_dir.mkdir()
+        (settings_dir / "settings.json").write_text(json.dumps({
+            "permissions": {
+                "deny": ["mcp__github"],
+            }
+        }))
+        reset_permission_cache()
+
+        decision = check_permission("mcp__github__list_issues", {"owner": "acme"})
+
+        self.assertEqual(decision.action, "deny")
+        self.assertEqual(decision.message, "Denied by permission rule for mcp__github__list_issues")
+
+    def test_protected_paths_are_not_bypassed_by_yolo(self) -> None:
+        git_dir = self.project / ".git"
+        git_dir.mkdir()
+        target = git_dir / "config"
+
+        decision = check_permission(
+            "write_file",
+            {"file_path": str(target)},
+            mode="bypassPermissions",
+        )
+
+        self.assertEqual(decision.action, "confirm")
+        self.assertIn("protected path", decision.message)
+
     def test_accept_edits_allows_builtin_edit_tools(self) -> None:
         path = self.project / "existing.txt"
         path.write_text("old")
@@ -100,6 +147,19 @@ class PermissionTests(IsolatedToolTest):
 
         self.assertEqual(decision.action, "confirm")
         self.assertEqual(decision.message, f"write new file: {self.project / 'new.txt'}")
+
+    def test_file_existence_checks_use_passed_cwd(self) -> None:
+        subdir = self.project / "pkg"
+        subdir.mkdir()
+        (subdir / "existing.txt").write_text("old")
+
+        decision = check_permission(
+            "write_file",
+            {"file_path": "existing.txt"},
+            cwd=subdir,
+        )
+
+        self.assertEqual(decision.action, "allow")
 
 
 class RegistryTests(IsolatedToolTest):
@@ -135,6 +195,35 @@ class RegistryTests(IsolatedToolTest):
             self.assertNotIn(key, matches[0])
             activated = next(t for t in registry.active_definitions() if t["name"] == "deferred_read")
             self.assertNotIn(key, activated)
+
+    def test_deferred_search_supports_select_and_server_filter(self) -> None:
+        registry = ToolRegistry()
+        registry.add_many([
+            {
+                "name": "mcp__github__list_issues",
+                "description": "List issues",
+                "input_schema": {"type": "object"},
+                "deferred": True,
+                "origin": "mcp",
+                "mcp_server": "github",
+                "mcp_tool": "list_issues",
+            },
+            {
+                "name": "mcp__linear__list_issues",
+                "description": "List issues",
+                "input_schema": {"type": "object"},
+                "deferred": True,
+                "origin": "mcp",
+                "mcp_server": "linear",
+                "mcp_tool": "list_issues",
+            },
+        ], origin="mcp")
+
+        selected = registry.search_deferred("select:mcp__github__list_issues")
+        filtered = registry.search_deferred("+linear issues")
+
+        self.assertEqual([tool["name"] for tool in selected], ["mcp__github__list_issues"])
+        self.assertEqual([tool["name"] for tool in filtered], ["mcp__linear__list_issues"])
 
     def test_registry_instances_do_not_share_deferred_state(self) -> None:
         first = ToolRegistry([self._deferred_tool()])

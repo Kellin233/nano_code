@@ -1,5 +1,7 @@
 # 2. 工具系统
 
+> Current status: 全局 Plan Mode 工具（`enter_plan_mode` / `exit_plan_mode`）已从源码删除。本文中相关示例属于历史设计记录；当前规划能力通过 `agent` 工具中的 `plan` 子 agent 提供。
+
 ## 本章目标
 
 定义 6 个核心工具（读文件、写文件、编辑文件、列文件、搜索、Shell）+ 5 个扩展工具（skill、agent、web_fetch、tool_search、plan mode），让 LLM 能真正操作你的代码库。实现编辑防护（read-before-edit + mtime 检查）和延迟加载（deferred tools）机制。

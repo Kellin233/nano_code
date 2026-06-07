@@ -1,16 +1,8 @@
 """Agent 工具运行时。
 
-本模块负责“模型请求调用一个工具以后，Agent 如何处理这个请求”。
-它位于模型后端循环和底层工具实现之间：
-
-- `backends.py` 解析出 tool call 后，会调用这里的 `_execute_tool_call()`。
-- 普通内置工具最终转发到 `tools.runtime`。
-- 需要 Agent 当前状态的能力留在这里处理，例如 skill、sub-agent、MCP。
-
-为什么不全放进 `tools.runtime`：
-- tools 包应保持清晰边界，方便测试和复用。
-- skill/sub-agent/MCP 需要访问当前 Agent 的模型、权限、token、消息状态。
-- 大结果持久化和危险操作确认也依赖当前会话语义。
+本模块保留需要访问 Agent 状态的工具辅助能力，例如 skill、sub-agent、
+MCP 和确认提示。正常工具执行管线已经迁到 `tools.runtime.ToolRuntime`；
+这里的 `_execute_tool_call()` 作为兼容入口保留，避免旧测试或内部调用直接失效。
 """
 
 from __future__ import annotations
@@ -32,7 +24,7 @@ class AgentToolRuntimeMixin:
     `_tool_registry`、`permission_mode`、`_read_file_state`、`_mcp_manager`、
     `_skill_invocation`、`_active_skills`、token 计数和输出 buffer。
 
-    提供给后端循环使用的方法：
+    提供给事件流和兼容路径使用的方法：
     `_current_tool_definitions()`、`_execute_tool_call()`、
     `_persist_large_result()`、`_confirm_dangerous()`。
     """
@@ -77,7 +69,16 @@ class AgentToolRuntimeMixin:
             return self._execute_tool_search(inp)
         if self._mcp_manager.is_mcp_tool(name):
             return await self._mcp_manager.call_tool(name, inp)
-        return await execute_builtin_tool(name, inp, self._read_file_state)
+        if name == "list_mcp_resources":
+            return await self._mcp_manager.list_resources(inp.get("server") or None)
+        if name == "read_mcp_resource":
+            return await self._mcp_manager.read_resource(str(inp.get("server", "")), str(inp.get("uri", "")))
+        return await execute_builtin_tool(
+            name,
+            inp,
+            self._read_file_state,
+            self._sandbox_manager,
+        )
 
     def _execute_tool_search(self, inp: dict) -> str:
         matches = self._tool_registry.search_deferred(inp.get("query", ""))
@@ -140,6 +141,7 @@ class AgentToolRuntimeMixin:
             custom_tools=tools,
             is_sub_agent=True,
             permission_mode="bypassPermissions",
+            sandbox_manager=self._sandbox_manager,
         )
         try:
             sub_result = await sub_agent.run_once(invocation.args or "Execute this skill task.")
@@ -177,6 +179,7 @@ class AgentToolRuntimeMixin:
             custom_tools=config["tools"],
             is_sub_agent=True,
             permission_mode="bypassPermissions",
+            sandbox_manager=self._sandbox_manager,
         )
 
         try:

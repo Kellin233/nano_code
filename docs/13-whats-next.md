@@ -35,11 +35,11 @@
 
 ## 我们没实现的
 
-### Hooks（钩子系统）
+### Hooks（钩子系统，MVP 已实现）
 
 Claude Code 有 25 种 hook 事件、6 种 hook 类型，可在工具执行前后插入自定义逻辑——拦截危险操作、记录审计日志、自动运行 lint 检查。它是 Claude Code 从"工具"变成"平台"的关键机制。
 
-我们没实现的原因：核心挑战不在于"调一个函数"，而在于 hook 的发现与加载、错误隔离、stdin/stdout JSON 数据协议。这些工程细节约 500-800 行，但对理解 agent 原理没有帮助。
+当前源码已经实现了最小 command hook：`UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop`，配置在 settings 中，子进程通过 stdin/stdout JSON 通信。尚未实现的是 Claude Code 级别的完整 Hook 系统，例如 HTTP Hook、Prompt Hook、Agent Hook、async rewake、技能级 Hook、企业策略和完整 trust dialog。
 
 Hooks 的用途是把“工具执行前后发生什么”交给用户配置。例如运行 shell 前先检查命令是否符合团队策略，编辑文件后自动跑 formatter，工具失败后写审计日志。它和权限系统相关，但比权限更通用：权限只回答能不能做，Hook 可以做记录、改写、提示、阻止等多种动作。
 
@@ -85,8 +85,8 @@ Prompt Caching 和第 3 章的系统提示词结构直接相关。只有把“�
 
 | 增强项 | 解决的问题 | 预计代码量 |
 |--------|-----------|-----------|
-| Hook 系统 | 定制 agent 行为需要改源码 | ~300 行 |
-| Tool 类型系统 | switch/case 不能扩展到 20+ 工具 | ~200 行 |
+| 完整 Hook 系统 | 当前只有 command hook MVP | ~500 行 |
+| Tool 类型系统深化 | 当前已有 Tool 契约和 adapter，复杂工具仍需逐个拆类 | ~300 行 |
 
 核心转变是**从硬编码到插件化**。当前 switch/case 在 10 个工具时没问题，但超过 20 个就需要引入 Tool 接口（或 Python 的 Protocol/ABC），让每个工具成为独立模块。
 
@@ -111,7 +111,7 @@ Claude Code 的查询循环模块有大量边缘情况处理：Prompt Too Long �
 
 ### 1. Hooks 系统
 
-最简单的方案是 command hook——在 `executeTool` 前 spawn shell 子进程，通过 stdin JSON 传入工具信息，解析 stdout JSON 决定 allow/deny。
+当前已经有 command hook MVP：在工具执行前后 spawn shell 子进程，通过 stdin JSON 传入工具信息，解析 stdout JSON 决定 allow/deny/modify/append_context。
 
 配置示例：
 ```json
@@ -124,7 +124,7 @@ Claude Code 的查询循环模块有大量边缘情况处理：Prompt Too Long �
 }
 ```
 
-核心逻辑：遍历匹配的 hook，spawn 子进程传 JSON，根据 `{"action": "allow"}` / `{"action": "deny", "reason": "..."}` 决定是否继续执行。约 300 行，最耗时的是子进程的超时和 crash 处理。
+后续扩展重点不再是“能不能调用 hook”，而是完整 trust dialog、HTTP hook、Prompt/Agent hook、async rewake、技能级 hook、配置来源优先级和更严格的输出 schema。
 
 ### 2. 错误自修复
 
@@ -215,8 +215,8 @@ Claude Code 50 万行里的大量代码是边缘情况处理和企业级可靠�
 
 ## 本章小结：如何理解“没实现的部分”
 
-这一章列出的 Hooks、Coordinator、LSP、Prompt Caching、Bash AST 安全分析，并不是另一个世界的东西。它们都是围绕同一个主循环继续增强：Hooks 让工具执行前后可插入用户逻辑；Coordinator 让任务能被多个智能体拆分；LSP 让代码理解更精确；Prompt Caching 降低重复上下文成本；Bash AST 分析让 shell 权限更可靠。
+这一章列出的 Coordinator、LSP、Prompt Caching、Bash AST 安全分析，以及完整 Claude Code 级 Hooks，并不是另一个世界的东西。它们都是围绕同一个主循环继续增强：Hooks 让工具执行前后可插入用户逻辑；Coordinator 让任务能被多个智能体拆分；LSP 让代码理解更精确；Prompt Caching 降低重复上下文成本；Bash AST 分析让 shell 权限更可靠。
 
-如果要扩展当前 Python 版，建议先判断你要解决的是哪类问题。想提高可扩展性，优先做 Hooks 或插件化工具注册；想提高代码理解，优先接 LSP 或更强的索引；想提高安全，优先替换正则命令检测；想降低成本，优先做提示词缓存和更细的上下文压缩。
+如果要扩展当前 Python 版，建议先判断你要解决的是哪类问题。想提高可扩展性，优先深化 Hooks 或继续拆复杂 Tool；想提高代码理解，优先接 LSP 或更强的索引；想提高安全，优先替换正则命令检测；想降低成本，优先做提示词缓存和更细的上下文压缩。
 
 相关概念是“复杂度预算”。完整 Claude Code 的大量代码不是为了展示主干，而是为了覆盖真实用户环境里的边界情况。教程项目的价值在于把主干讲清楚。你扩展时也应该保持这个原则：先确认问题真实存在，再引入相应复杂度。

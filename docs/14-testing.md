@@ -1,5 +1,7 @@
 # 14. 功能测试指南
 
+> Current status: 全局 Plan Mode 已删除，本文中 `/plan`、`enter_plan_mode`、`exit_plan_mode` 的测试项属于历史记录。当前应测试 `agent` 工具的 `plan` 子 agent，而不是全局 Plan Mode。
+
 ## 本章目标
 
 验证 mini-claude 的 19 项核心功能都正常工作。所有测试均为手动执行 + 目视验证，全部使用 `--yolo` 模式（跳过权限确认）。

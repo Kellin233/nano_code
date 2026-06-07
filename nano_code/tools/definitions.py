@@ -6,9 +6,9 @@ import copy
 
 from .types import ToolDef
 
-READ_TOOL_NAMES = {"read_file", "list_files", "grep_search", "web_fetch"}
+READ_TOOL_NAMES = {"read_file", "list_files", "grep_search", "web_fetch", "list_mcp_resources", "read_mcp_resource"}
 EDIT_TOOL_NAMES = {"write_file", "edit_file"}
-CONCURRENCY_SAFE_BUILTIN_TOOLS = {"read_file", "list_files", "grep_search", "web_fetch"}
+CONCURRENCY_SAFE_BUILTIN_TOOLS = {"read_file", "list_files", "grep_search", "web_fetch", "list_mcp_resources", "read_mcp_resource"}
 
 BUILTIN_TOOL_DEFINITIONS: list[ToolDef] = [
     {
@@ -130,6 +130,28 @@ BUILTIN_TOOL_DEFINITIONS: list[ToolDef] = [
                 "query": {"type": "string", "description": "Tool name or search keywords"},
             },
             "required": ["query"],
+        },
+    },
+    {
+        "name": "list_mcp_resources",
+        "description": "List MCP resources exposed by connected MCP servers. Optionally filter by server name.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "Optional MCP server name to filter resources by"},
+            },
+        },
+    },
+    {
+        "name": "read_mcp_resource",
+        "description": "Read a resource from a connected MCP server by server name and resource URI.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "server": {"type": "string", "description": "MCP server name"},
+                "uri": {"type": "string", "description": "Resource URI returned by list_mcp_resources"},
+            },
+            "required": ["server", "uri"],
         },
     },
 ]

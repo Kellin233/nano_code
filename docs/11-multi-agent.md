@@ -1,5 +1,7 @@
 # 11. 多 Agent 架构
 
+> Current status: 当前源码保留 `plan` 子 agent，但已删除全局 Plan Mode。本文中“Plan Mode 继承权限”的段落属于历史设计记录；现在只读约束由子 agent 工具白名单强制。
+
 ## 本章目标
 
 实现 Sub-Agent（子代理）系统：让主 Agent 能派生出独立的子 Agent 执行探索、规划、通用任务，完成后将结果返回主 Agent。这是 Claude Code 处理复杂任务时最重要的"分而治之"机制。
