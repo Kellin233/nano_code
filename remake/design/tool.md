@@ -2,7 +2,7 @@
 
 ## 目标
 
-把当前 `nano_code/nano_code/tools.py` 从“工具定义、内置工具执行、权限、延迟加载、结果截断全部混在一个文件里”的结构，重构成职责清晰、边界稳定、便于测试和扩展的工具模块。
+把当前 `src/tools.py` 从“工具定义、内置工具执行、权限、延迟加载、结果截断全部混在一个文件里”的结构，重构成职责清晰、边界稳定、便于测试和扩展的工具模块。
 
 本轮允许调整 `tool` 以外的少量调用点，也允许改变内部和对外 import API。要求是：功能行为不变，模块边界更清楚，后续新增工具、接入 MCP、调整权限策略时不需要继续堆大文件。
 
@@ -24,13 +24,13 @@
 删除单文件：
 
 ```text
-nano_code/nano_code/tools.py
+src/tools.py
 ```
 
 改成包：
 
 ```text
-nano_code/nano_code/tools/
+src/tools/
 ├── __init__.py
 ├── types.py
 ├── definitions.py
@@ -43,15 +43,15 @@ nano_code/nano_code/tools/
 同时适度修改这些调用点：
 
 ```text
-nano_code/nano_code/agent/core.py
-nano_code/nano_code/agent/backends.py
-nano_code/nano_code/agent/tools_runtime.py
-nano_code/nano_code/agent/models.py
-nano_code/nano_code/agent/__init__.py
-nano_code/nano_code/prompt.py
-nano_code/nano_code/subagent.py
-nano_code/nano_code/mcp_client.py   # 只在需要补 metadata/sanitize 时改
-nano_code/test/*.py
+src/agent/core.py
+src/agent/backends.py
+src/agent/tools_runtime.py
+src/agent/models.py
+src/agent/__init__.py
+src/prompt.py
+src/subagent.py
+src/mcp_client.py   # 只在需要补 metadata/sanitize 时改
+nanocode/test/*.py
 ```
 
 模块职责：
@@ -94,10 +94,10 @@ tool 模块不包含：
 
 之前保守方案是新增 `tooling/` 包，同时保留 `tools.py` 作为兼容门面。现在既然允许 API 调整，就不应该继续让历史文件名决定新设计。
 
-直接改成 `nano_code.tools` 包有几个好处：
+直接改成 `nanocode.domains.tools` 包有几个好处：
 
 - 包名符合领域概念，不需要额外解释 `tooling`。
-- 调用方可以按职责导入，例如 `nano_code.tools.permissions`、`nano_code.tools.runtime`。
+- 调用方可以按职责导入，例如 `nanocode.domains.tools.permissions`、`nanocode.domains.tools.runtime`。
 - `__init__.py` 可以只导出少量公共 API，不需要继续 re-export 私有函数。
 - 后续新增模块不会让 `tools.py` 重新膨胀。
 
@@ -232,7 +232,7 @@ def builtin_tool_definitions() -> list[ToolDef]:
 `tool_definitions` 这个旧名字可以不保留。调用方统一改为：
 
 ```python
-from nano_code.tools.definitions import builtin_tool_definitions
+from nanocode.domains.tools.definitions import builtin_tool_definitions
 ```
 
 或者通过 registry：
@@ -266,7 +266,7 @@ registry = ToolRegistry.with_builtin_tools()
 可以把原来的私有工具函数改成不带下划线的模块内公共函数，因为它们现在处在明确的 `tools.builtin` 命名空间里：
 
 ```python
-from nano_code.tools.builtin import write_file
+from nanocode.domains.tools.builtin import write_file
 ```
 
 但不建议从 `tools/__init__.py` 导出这些具体工具函数。外部业务通常不应该直接调用某个工具实现，而应该通过 `execute_builtin_tool()` 或 Agent 路由。
@@ -520,10 +520,10 @@ __all__ = [
 ]
 ```
 
-旧的 `_write_file`、`_edit_file` 等不再从 `nano_code.tools` 导出。测试改成：
+旧的 `_write_file`、`_edit_file` 等不再从 `nanocode.domains.tools` 导出。测试改成：
 
 ```python
-from nano_code.tools.builtin import write_file
+from nanocode.domains.tools.builtin import write_file
 ```
 
 这是一次明确的 API 清理，不需要兼容旧私有导入。
@@ -690,7 +690,7 @@ from ..tools.types import ToolDef
 
 `agent/__init__.py` 是兼容出口，但本轮既然允许 API 改动，不需要继续 re-export 工具运行函数。建议只保留 Agent 相关导出，删除工具层旧兼容导出。
 
-如果测试或用户代码需要工具 API，应显式从 `nano_code.tools` 或具体子模块导入。
+如果测试或用户代码需要工具 API，应显式从 `nanocode.domains.tools` 或具体子模块导入。
 
 ## 硬性约束
 
@@ -706,7 +706,7 @@ from ..tools.types import ToolDef
 
 不能改变：
 
-- 用户使用 nano_code 的主要行为。
+- 用户使用 nanocode 的主要行为。
 - 工具 schema 的语义。
 - 工具执行结果的关键文案。
 - 权限模式语义。
@@ -850,13 +850,13 @@ MCP 工具可以进入 registry，也可以参与权限和并发安全判断。�
 必须删除：
 
 ```text
-nano_code/nano_code/tools.py
+src/tools.py
 ```
 
 再创建：
 
 ```text
-nano_code/nano_code/tools/
+src/tools/
 ```
 
 如果两者同时存在，Python import 会出问题。实施时建议一次提交内完成迁移，避免中间状态。
@@ -866,13 +866,13 @@ nano_code/nano_code/tools/
 现有测试里有：
 
 ```python
-from nano_code.tools import _write_file
+from nanocode.domains.tools import _write_file
 ```
 
 本轮允许 API 清理，应改成：
 
 ```python
-from nano_code.tools.builtin import write_file
+from nanocode.domains.tools.builtin import write_file
 ```
 
 不要为了兼容私有函数，把 `tools/__init__.py` 又变成大杂烩。
@@ -996,7 +996,7 @@ Agent 仍应 best-effort 初始化 MCP：失败只打印信息，继续会话。
 
 ### 第一阶段：补行为锁测试
 
-新增或调整 `nano_code/test/test_tools.py`，覆盖：
+新增或调整 `nanocode/test/test_tools.py`，覆盖：
 
 1. 权限：
    - read-only 工具默认 allow。
@@ -1035,8 +1035,8 @@ Agent 仍应 best-effort 初始化 MCP：失败只打印信息，继续会话。
 
 步骤：
 
-1. 删除 `nano_code/nano_code/tools.py`。
-2. 新建 `nano_code/nano_code/tools/`。
+1. 删除 `src/tools.py`。
+2. 新建 `src/tools/`。
 3. 创建 `types.py`。
 4. 创建 `definitions.py`，迁移 schema 和常量。
 5. 创建 `builtin.py`，迁移内置工具实现。
@@ -1050,7 +1050,7 @@ Agent 仍应 best-effort 初始化 MCP：失败只打印信息，继续会话。
 每完成一个阶段跑：
 
 ```bash
-python -m compileall nano_code/nano_code
+python -m compileall src test
 ```
 
 ### 第三阶段：迁移 Agent 调用点
@@ -1092,18 +1092,18 @@ python -m compileall nano_code/nano_code
 用 `rg` 找旧导入：
 
 ```bash
-rg -n "from \\.tools import|from \\.\\.tools import|from nano_code\\.tools import|import nano_code\\.tools" nano_code test
+rg -n "from \\.tools import|from \\.\\.tools import|from nanocode\\.tools import|import nanocode\\.tools" nanocode test
 ```
 
 按职责改成：
 
 ```python
-from nano_code.tools.types import ToolDef
-from nano_code.tools.definitions import builtin_tool_definitions
-from nano_code.tools.permissions import check_permission
-from nano_code.tools.runtime import execute_builtin_tool
-from nano_code.tools.registry import ToolRegistry
-from nano_code.tools.builtin import write_file
+from nanocode.domains.tools.types import ToolDef
+from nanocode.domains.tools.definitions import builtin_tool_definitions
+from nanocode.domains.tools.permissions import check_permission
+from nanocode.domains.tools.runtime import execute_builtin_tool
+from nanocode.domains.tools.registry import ToolRegistry
+from nanocode.domains.tools.builtin import write_file
 ```
 
 不要为了省事让 `tools/__init__.py` 导出所有旧名字。
@@ -1113,8 +1113,8 @@ from nano_code.tools.builtin import write_file
 运行：
 
 ```bash
-python -m compileall nano_code/nano_code
-python -m unittest discover nano_code/test
+python -m compileall src test
+python -m unittest discover nanocode/test
 ```
 
 手工验收：

@@ -2,7 +2,7 @@
 
 ## 目标
 
-把 `nano_code` 的 sandbox 从“只支持 local / microsandbox 的 shell 后端切换”升级成更适合个人 Linux 日常使用的安全执行系统。
+把 `nanocode` 的 sandbox 从“只支持 local / microsandbox 的 shell 后端切换”升级成更适合个人 Linux 日常使用的安全执行系统。
 
 最终定位：
 
@@ -14,7 +14,7 @@
   OCI image + microVM 级隔离 + 更强隔离 + 更可复现的干净环境
 ```
 
-这不是要复刻 Codex CLI，也不是要把 microsandbox 的完整平台能力搬进来。`nano_code` 的核心仍然是 coding agent runtime。sandbox 只负责让模型生成的 shell 命令在清楚、可解释、可配置的边界内执行。
+这不是要复刻 Codex CLI，也不是要把 microsandbox 的完整平台能力搬进来。`nanocode` 的核心仍然是 coding agent runtime。sandbox 只负责让模型生成的 shell 命令在清楚、可解释、可配置的边界内执行。
 
 ## 设计定位
 
@@ -38,7 +38,7 @@ sandbox：执行中，限制 shell 命令实际能碰哪些文件、网络和系
 当前代码已经有一个正确的基础：
 
 ```text
-nano_code/sandbox/
+nanocode/sandbox/
 ├── types.py
 ├── config.py
 ├── backend.py
@@ -70,13 +70,13 @@ nano_code/sandbox/
 
 ### 一句话结论
 
-新增 Linux 本地 `BwrapBackend`，让 `nano_code` 默认使用宿主工具链运行命令，同时用 `bubblewrap` 限制文件系统和网络边界。保留 `LocalBackend` 作为明确的无沙箱兼容模式，保留 `MicrosandboxBackend` 作为需要 microVM 强隔离时的进阶模式。
+新增 Linux 本地 `BwrapBackend`，让 `nanocode` 默认使用宿主工具链运行命令，同时用 `bubblewrap` 限制文件系统和网络边界。保留 `LocalBackend` 作为明确的无沙箱兼容模式，保留 `MicrosandboxBackend` 作为需要 microVM 强隔离时的进阶模式。
 
 ### 先看心智模型
 
 sandbox 这块最容易讲乱，因为有三个相近但不同的词：profile、backend、policy。
 
-在 `nano_code` 里，这三个词应该这样理解：
+在 `nanocode` 里，这三个词应该这样理解：
 
 ```text
 Profile：用户选择的安全模式，回答“我要多安全/多兼容？”
@@ -177,20 +177,20 @@ Linux 但 bwrap 不可用：
 
 非 Linux：
   暂时 profile = local
-  明确提示：nano_code 的 OS sandbox 第一阶段只支持 Linux
+  明确提示：nanocode 的 OS sandbox 第一阶段只支持 Linux
 ```
 
 如果用户要强隔离，显式选择：
 
 ```bash
-nano-code --sandbox microsandbox-safe "inspect this project"
-nano-code --sandbox microsandbox-dev --sandbox-image node:22 "run npm test"
+nanocode --sandbox microsandbox-safe "inspect this project"
+nanocode --sandbox microsandbox-dev --sandbox-image node:22 "run npm test"
 ```
 
 如果用户要完全兼容，显式选择：
 
 ```bash
-nano-code --sandbox local "run this host-specific command"
+nanocode --sandbox local "run this host-specific command"
 ```
 
 默认行为要坚持 fail closed：Linux 上应该优先提示用户安装 `bubblewrap`，而不是悄悄退回 `local`。只有用户显式配置 `allow_fallback_to_local`，才允许从 sandbox 退回无隔离执行。
@@ -200,7 +200,7 @@ nano-code --sandbox local "run this host-specific command"
 建议结构：
 
 ```text
-nano_code/sandbox/
+nanocode/sandbox/
 ├── __init__.py
 ├── types.py
 ├── config.py
@@ -374,7 +374,7 @@ Linux:
 
 非 Linux:
   profile 默认为 local
-  输出提示：OS sandbox is currently Linux-only in nano_code
+  输出提示：OS sandbox is currently Linux-only in nanocode
 ```
 
 第一版不要自动修改系统，也不要自动安装 bubblewrap。缺失时给出明确错误。
@@ -502,7 +502,7 @@ network default:
 
 ```text
 PATH
-HOME=/tmp/nano-code-home 或 /tmp
+HOME=/tmp/nanocode-home 或 /tmp
 LANG
 LC_ALL
 TERM
@@ -600,7 +600,7 @@ def describe(self) -> str
 Sandbox profile: workspace
 Backend: bwrap
 Shell isolation: OS-level sandbox
-Workspace: /root/EvoCode/nano_code
+Workspace: /root/EvoCode/nanocode
 Workspace writable: true
 Network: none
 Home mounted: false
@@ -630,11 +630,11 @@ local/danger-full-access:
 CLI 参数建议：
 
 ```bash
-nano-code --sandbox workspace "run tests"
-nano-code --sandbox read-only "inspect this repo"
-nano-code --sandbox local "run this local-only command"
-nano-code --sandbox microsandbox-safe "run this untrusted command"
-nano-code --sandbox microsandbox-dev --sandbox-image node:22 "run npm test"
+nanocode --sandbox workspace "run tests"
+nanocode --sandbox read-only "inspect this repo"
+nanocode --sandbox local "run this local-only command"
+nanocode --sandbox microsandbox-safe "run this untrusted command"
+nanocode --sandbox microsandbox-dev --sandbox-image node:22 "run npm test"
 ```
 
 启动或首次 shell 执行前可以显示一次简短 status：
@@ -864,19 +864,19 @@ bwrap 使用宿主路径，microsandbox 使用 guest 路径 `/workspace`。`Sand
 可以在 README 或面试中这样描述：
 
 ```text
-nano_code 的 sandbox 采用两级后端设计。默认 Linux 后端参考 Codex CLI 的本地 sandbox 思路：命令使用宿主工具链执行，但通过 OS 级隔离限制在 workspace 内，网络默认关闭。microsandbox 作为进阶后端，用 microVM 和 OCI image 提供更强隔离，适合运行不信任命令或需要干净环境的场景。权限系统始终在 sandbox 之前生效，sandbox 只负责 run_shell 的执行边界。
+nanocode 的 sandbox 采用两级后端设计。默认 Linux 后端参考 Codex CLI 的本地 sandbox 思路：命令使用宿主工具链执行，但通过 OS 级隔离限制在 workspace 内，网络默认关闭。microsandbox 作为进阶后端，用 microVM 和 OCI image 提供更强隔离，适合运行不信任命令或需要干净环境的场景。权限系统始终在 sandbox 之前生效，sandbox 只负责 run_shell 的执行边界。
 ```
 
 不要说：
 
 ```text
-nano_code 实现了 Codex sandbox
-nano_code 完整复刻 microsandbox
+nanocode 实现了 Codex sandbox
+nanocode 完整复刻 microsandbox
 所有工具都在 sandbox 中执行
 ```
 
 更准确的是：
 
 ```text
-nano_code 借鉴 Codex 的 sandbox/profile/approval 分层思想，并把 microsandbox 封装为可替换的 shell execution backend。
+nanocode 借鉴 Codex 的 sandbox/profile/approval 分层思想，并把 microsandbox 封装为可替换的 shell execution backend。
 ```

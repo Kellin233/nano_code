@@ -10,13 +10,13 @@ from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
 
-from nano_code.hooks import HookManager
-from nano_code.hooks.runner import run_command_hook
-from nano_code.hooks.types import HookCommand, HookInput
-from nano_code.permissions import check_permission
-from nano_code.permissions.rules import reset_permission_cache
-from nano_code.permissions.shell import check_shell_safety
-from nano_code.sandbox import SandboxConfig, SandboxManager, build_sandbox_config
+from nanocode.domains.hooks import HookManager
+from nanocode.domains.hooks.runner import run_command_hook
+from nanocode.domains.hooks.types import HookCommand, HookInput
+from nanocode.domains.permissions import check_permission
+from nanocode.domains.permissions.rules import reset_permission_cache
+from nanocode.domains.permissions.shell import check_shell_safety
+from nanocode.domains.sandbox import SandboxConfig, SandboxManager, build_sandbox_config
 
 
 class PermissionsHooksSandboxV1Tests(unittest.TestCase):
@@ -111,14 +111,14 @@ class PermissionsHooksSandboxV1Tests(unittest.TestCase):
             sandbox_extra_write=None,
             sandbox_allow_local_fallback=False,
         )
-        with patch("nano_code.sandbox.config.platform.system", return_value="Linux"):
+        with patch("nanocode.domains.sandbox.config.platform.system", return_value="Linux"):
             config = build_sandbox_config(args)
         strict_manager = SandboxManager(
             SandboxConfig(profile="workspace", backend="bwrap", workspace_host_path=self.project),
             session_id="v1",
         )
 
-        with patch("nano_code.sandbox.bwrap_backend.shutil.which", return_value=None):
+        with patch("nanocode.domains.sandbox.bwrap_backend.shutil.which", return_value=None):
             result = asyncio.run(strict_manager.run_shell("printf auto", 30000, self.project))
 
         self.assertEqual(config.profile, "workspace")

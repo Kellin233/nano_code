@@ -2,7 +2,7 @@
 
 ## 目标
 
-把 `nano_code` 的长期记忆系统升级为一个低依赖、可审计、可维护的文件式记忆模块。
+把 `nanocode` 的长期记忆系统升级为一个低依赖、可审计、可维护的文件式记忆模块。
 
 本方案采用前面讨论的 **方案 B+**：
 
@@ -16,7 +16,7 @@
 + 显式维护：去重、衰减、归档
 ```
 
-这里不追求复刻 SimpleMem 的完整平台能力，也不引入向量数据库、embedding 模型或复杂索引服务。`nano_code` 的主目标是 coding agent runtime，记忆系统应该服务 agent 的长期上下文，而不是反过来把项目变成记忆平台。
+这里不追求复刻 SimpleMem 的完整平台能力，也不引入向量数据库、embedding 模型或复杂索引服务。`nanocode` 的主目标是 coding agent runtime，记忆系统应该服务 agent 的长期上下文，而不是反过来把项目变成记忆平台。
 
 ## 设计定位
 
@@ -35,7 +35,7 @@
 
 ### 先看心智模型
 
-长期记忆不要理解成“把聊天记录存起来”。在 `nano_code` 里，一条记忆应该是一份很小的、可审计的项目笔记：
+长期记忆不要理解成“把聊天记录存起来”。在 `nanocode` 里，一条记忆应该是一份很小的、可审计的项目笔记：
 
 ```text
 正文：这条记忆到底说了什么
@@ -147,10 +147,10 @@ LLM side-query 只负责在候选里精选，不负责全库搜索。这样做�
 
 ### 模块结构
 
-保留 `nano_code/memory/` 包，按真实变更原因划分模块：
+保留 `nanocode/memory/` 包，按真实变更原因划分模块：
 
 ```text
-nano_code/memory/
+nanocode/memory/
 ├── __init__.py
 ├── types.py           # MemoryEntry、查询计划、召回结果等数据结构
 ├── store.py           # Markdown/frontmatter 读写、索引同步、文件状态
@@ -275,11 +275,11 @@ class RelevantMemory:
 ---
 memory_id: 20260607-a31b9c2d
 name: 用户偏好简洁务实的实现风格
-description: 用户希望 nano_code 代码简洁优雅务实，合理抽象，不炫技也不偷工减料
+description: 用户希望 nanocode 代码简洁优雅务实，合理抽象，不炫技也不偷工减料
 type: feedback
 status: active
 keywords: code style, pragmatic, maintainable
-entities: nano_code
+entities: nanocode
 topics: engineering quality, implementation style
 timestamp: 2026-06-07T00:00:00+08:00
 importance: 0.85
@@ -297,7 +297,7 @@ confidence_reason: 直接来自用户明确指令
 last_verified_at: 2026-06-07T15:30:00+08:00
 requires_verification: false
 ---
-用户希望 nano_code 的代码实现保持简洁、优雅、务实。设计时要有软件工程思维，合理抽象，按需划分模块，避免过度设计，也不能为了简单而偷工减料。
+用户希望 nanocode 的代码实现保持简洁、优雅、务实。设计时要有软件工程思维，合理抽象，按需划分模块，避免过度设计，也不能为了简单而偷工减料。
 
 Why: 用户关注工程质量、维护成本和面试可解释性。
 How to apply: 给出方案或写代码时，优先选择边界清晰、局部可测、后续可扩展的实现。
@@ -311,7 +311,7 @@ How to apply: 给出方案或写代码时，优先选择边界清晰、局部可
 ## Supporting Evidence
 
 - User explicitly requested pragmatic and maintainable implementation style on 2026-06-07.
-- Applies to nano_code design and refactor discussions.
+- Applies to nanocode design and refactor discussions.
 ```
 
 ### 3. `store.py`
@@ -327,7 +327,7 @@ How to apply: 给出方案或写代码时，优先选择边界清晰、局部可
 路径保持：
 
 ```text
-~/.nano-code/projects/{sha256(cwd)[:16]}/memory/
+~/.nanocode/projects/{sha256(cwd)[:16]}/memory/
 ```
 
 主要 API：
@@ -360,7 +360,7 @@ def load_memory_index() -> str
 ```markdown
 # Memory Index
 
-- **[用户偏好简洁务实的实现风格](feedback_user_prefers_pragmatic_style.md)** (feedback) [importance=0.85] - 用户希望 nano_code 代码简洁优雅务实，合理抽象
+- **[用户偏好简洁务实的实现风格](feedback_user_prefers_pragmatic_style.md)** (feedback) [importance=0.85] - 用户希望 nanocode 代码简洁优雅务实，合理抽象
 ```
 
 索引只展示 active 记忆。`superseded` 和 `archived` 文件保留在磁盘上，但不进入默认索引。
@@ -437,7 +437,7 @@ score =
 这里不要追求数学精致，关键是可解释。每个命中都要能写进 `reason`：
 
 ```text
-matched keywords: memory, recall; matched entity: nano_code; high importance
+matched keywords: memory, recall; matched entity: nanocode; high importance
 ```
 
 #### side-query 精选
@@ -529,7 +529,7 @@ Memory: /path/to/file.md
 Type: feedback
 Updated: 2026-06-07T15:30:00+08:00
 Freshness: Memory saved today.
-Score reason: matched entity: nano_code; high importance
+Score reason: matched entity: nanocode; high importance
 Evidence: 用户明确要求简洁务实的代码风格
 Requires verification: false
 

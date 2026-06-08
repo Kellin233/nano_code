@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nano_code.memory.consolidation import consolidate_memories
-from nano_code.memory.store import get_memory, get_memory_dir, list_memories, save_memory
+from nanocode.domains.memory.consolidation import consolidate_memories
+from nanocode.domains.memory.store import get_memory, get_memory_dir, list_memories, save_memory
 
 
 class IsolatedMemoryTest(unittest.TestCase):
@@ -35,14 +35,14 @@ class MemoryConsolidationTests(IsolatedMemoryTest):
             "Duplicate Low",
             "duplicate memory",
             "project",
-            "nano_code memory should stay file-backed and self-contained.",
+            "nanocode memory should stay file-backed and self-contained.",
             importance=0.4,
         )
         high = save_memory(
             "Duplicate High",
             "duplicate memory",
             "project",
-            "nano_code memory should stay file-backed and self-contained.",
+            "nanocode memory should stay file-backed and self-contained.",
             importance=0.8,
         )
 

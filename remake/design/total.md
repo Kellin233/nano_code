@@ -2,7 +2,7 @@
 
 ## 结论
 
-本次重构目标不是把 `nano_code` 改成 Claude Code 的等比例复刻，而是把当前轻量 agent runtime 的核心边界理顺。
+本次重构目标不是把 `nanocode` 改成 Claude Code 的等比例复刻，而是把当前轻量 agent runtime 的核心边界理顺。
 
 推荐路线：
 
@@ -66,26 +66,26 @@ Builtin / MCP / Skill / Agent tools
 建议新增或调整模块：
 
 ```text
-nano_code/agent/
+nanocode/agent/
   engine.py        # SessionEngine: chat入口、预算、保存、恢复
   loop.py          # AgentLoop: async generator 主循环
   events.py        # 事件类型
   state.py         # LoopState / SessionState
   backends.py      # Anthropic/OpenAI backend adapter，只负责模型流
 
-nano_code/tools/
+nanocode/tools/
   base.py          # Tool Protocol, ToolCall, ToolResult, ToolContext
   registry.py      # 注册、查找、deferred、MCP合并
   runtime.py       # ToolRuntime: permission -> hooks -> execute -> hooks
   builtin/         # 后续逐步拆 read/edit/shell/web
 
-nano_code/permissions/
+nanocode/permissions/
   policy.py        # check_permission 统一入口
   rules.py         # settings allow/deny
   shell.py         # shell safety parser/AST/正则兜底
   workspace.py     # workspace边界和保护路径
 
-nano_code/hooks/
+nanocode/hooks/
   config.py        # hooks配置加载和快照
   runner.py        # command hook执行
   types.py         # HookInput/HookOutput
@@ -93,7 +93,7 @@ nano_code/hooks/
 
 短期可以保留旧模块路径，并通过 adapter 兼容：
 
-- `nano_code.agent.Agent` 继续作为外部入口。
+- `nanocode.runtime.agent.Agent` 继续作为外部入口。
 - `tools.definitions` 继续提供旧 schema，但逐步迁移到 `Tool` 对象。
 - `tools.permissions` 可以先 re-export 新 `permissions.policy.check_permission`。
 - `agent/backends.py` 先保留 API stream 逻辑，但去掉工具执行和 UI 打印。
@@ -635,7 +635,7 @@ Prompt caching 后续再做：
 
 ## 硬性约束
 
-- 不能破坏现有 CLI：`nano-code "prompt"`、REPL、`--resume`、`--api-base` 必须继续可用。
+- 不能破坏现有 CLI：`nanocode "prompt"`、REPL、`--resume`、`--api-base` 必须继续可用。
 - `Agent.chat()` 和 `Agent.run_once()` 短期保持兼容。
 - 子 agent 和 fork skill 继续可用。
 - Anthropic 和 OpenAI 消息格式分别维护，不强行统一成一个可逆中间格式。

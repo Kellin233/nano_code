@@ -4,7 +4,7 @@ import asyncio
 import types
 import unittest
 
-from nano_code.agent import Agent
+from nanocode.runtime.agent import Agent
 
 
 class AgentLoopTests(unittest.TestCase):

@@ -8,17 +8,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-import nano_code.session as session_mod
-from nano_code.agent import Agent
-from nano_code.agent.context import MICROCOMPACT_IDLE_S, SNIP_PLACEHOLDER
-from nano_code.frontmatter import parse_frontmatter
-from nano_code.memory.retrieval import select_relevant_memories
-from nano_code.memory.store import get_memory_dir, list_memories, save_memory
-from nano_code.context.attachments import render_deferred_tools_attachment
-from nano_code.prompt import build_prompt_bundle, build_system_prompt
-from nano_code.skill import SkillInvocation, SkillRegistry
-from nano_code.skill.registry import reset_skill_cache
-from nano_code.subagent import get_sub_agent_config, reset_agent_cache
+import nanocode.session as session_mod
+from nanocode.runtime.agent import Agent
+from nanocode.runtime.agent.context import MICROCOMPACT_IDLE_S, SNIP_PLACEHOLDER
+from nanocode.domains.context.frontmatter import parse_frontmatter
+from nanocode.domains.memory.retrieval import select_relevant_memories
+from nanocode.domains.memory.store import get_memory_dir, list_memories, save_memory
+from nanocode.domains.context.attachments import render_deferred_tools_attachment
+from nanocode.domains.context.prompt import build_prompt_bundle, build_system_prompt
+from nanocode.domains.skills import SkillInvocation, SkillRegistry
+from nanocode.domains.skills.registry import reset_skill_cache
+from nanocode.domains.subagents import get_sub_agent_config, reset_agent_cache
 
 
 class MemorySkillSessionContextV1Tests(unittest.TestCase):
@@ -34,7 +34,7 @@ class MemorySkillSessionContextV1Tests(unittest.TestCase):
         self.home_patch = patch("pathlib.Path.home", return_value=self.home)
         self.home_patch.start()
         self.old_session_dir = session_mod.SESSION_DIR
-        session_mod.SESSION_DIR = self.home / ".nano-code" / "sessions"
+        session_mod.SESSION_DIR = self.home / ".nanocode" / "sessions"
         reset_skill_cache()
         reset_agent_cache()
 

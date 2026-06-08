@@ -9,14 +9,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nano_code.agent import Agent
-from nano_code.memory.retrieval import (
+from nanocode.runtime.agent import Agent
+from nanocode.domains.memory.retrieval import (
     pack_relevant_memories,
     select_relevant_memories,
     start_memory_prefetch,
 )
-from nano_code.memory.store import save_memory
-from nano_code.memory.types import MAX_SESSION_MEMORY_BYTES, RelevantMemory
+from nanocode.domains.memory.store import save_memory
+from nanocode.domains.memory.types import MAX_SESSION_MEMORY_BYTES, RelevantMemory
 
 
 class IsolatedMemoryTest(unittest.TestCase):
@@ -42,11 +42,11 @@ class MemoryRetrievalTests(IsolatedMemoryTest):
     def test_side_query_selects_from_local_candidates(self) -> None:
         selected = save_memory(
             "Nano Memory Rules",
-            "nano_code memory rules",
+            "nanocode memory rules",
             "project",
-            "nano_code memory should use file-backed self-contained entries.",
-            keywords=["nano_code", "memory"],
-            entities=["nano_code"],
+            "nanocode memory should use file-backed self-contained entries.",
+            keywords=["nanocode", "memory"],
+            entities=["nanocode"],
             topics=["memory"],
             importance=0.9,
         )
@@ -65,7 +65,7 @@ class MemoryRetrievalTests(IsolatedMemoryTest):
             return f'{{"selected_memories": ["{selected}"]}}'
 
         memories = asyncio.run(
-            select_relevant_memories("How should nano_code memory work?", side_query, set())
+            select_relevant_memories("How should nanocode memory work?", side_query, set())
         )
 
         self.assertEqual([memory.filename for memory in memories], [selected])
@@ -74,17 +74,17 @@ class MemoryRetrievalTests(IsolatedMemoryTest):
     def test_side_query_empty_selection_is_respected(self) -> None:
         save_memory(
             "Nano Memory Rules",
-            "nano_code memory rules",
+            "nanocode memory rules",
             "project",
-            "nano_code memory should use file-backed self-contained entries.",
-            keywords=["nano_code", "memory"],
+            "nanocode memory should use file-backed self-contained entries.",
+            keywords=["nanocode", "memory"],
         )
 
         async def side_query(system: str, user_message: str) -> str:
             return '{"selected_memories": []}'
 
         memories = asyncio.run(
-            select_relevant_memories("How should nano_code memory work?", side_query, set())
+            select_relevant_memories("How should nanocode memory work?", side_query, set())
         )
 
         self.assertEqual(memories, [])
@@ -92,10 +92,10 @@ class MemoryRetrievalTests(IsolatedMemoryTest):
     def test_side_query_failure_uses_local_fallback(self) -> None:
         filename = save_memory(
             "Nano Memory Rules",
-            "nano_code memory rules",
+            "nanocode memory rules",
             "project",
-            "nano_code memory should use file-backed self-contained entries.",
-            keywords=["nano_code", "memory"],
+            "nanocode memory should use file-backed self-contained entries.",
+            keywords=["nanocode", "memory"],
             importance=0.9,
         )
 
@@ -104,7 +104,7 @@ class MemoryRetrievalTests(IsolatedMemoryTest):
 
         with contextlib.redirect_stdout(io.StringIO()):
             memories = asyncio.run(
-                select_relevant_memories("How should nano_code memory work?", side_query, set())
+                select_relevant_memories("How should nanocode memory work?", side_query, set())
             )
 
         self.assertEqual(len(memories), 1)
@@ -142,10 +142,10 @@ class MemoryRetrievalTests(IsolatedMemoryTest):
     def test_prefetch_gates_short_queries_budget_and_subagents(self) -> None:
         save_memory(
             "Nano Memory Rules",
-            "nano_code memory rules",
+            "nanocode memory rules",
             "project",
-            "nano_code memory should use file-backed entries.",
-            keywords=["nano_code", "memory"],
+            "nanocode memory should use file-backed entries.",
+            keywords=["nanocode", "memory"],
         )
 
         async def side_query(system: str, user_message: str) -> str:

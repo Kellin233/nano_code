@@ -8,13 +8,17 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nano_code.__main__ import _resolve_permission_mode, parse_args
-from nano_code.agent.models import _to_openai_tools, _with_retry
-from nano_code.tools.builtin import grep_search, list_files
+from nanocode.__main__ import _resolve_permission_mode, parse_args
+from nanocode.runtime.agent.models import _to_openai_tools, _with_retry
+from nanocode.domains.tools.builtin import grep_search, list_files
 
 
 class RetryableError(Exception):
     status_code = 429
+
+
+class MissingModelError(Exception):
+    status_code = 503
 
 
 class CliModelsBuiltinsV1Tests(unittest.TestCase):
@@ -29,7 +33,7 @@ class CliModelsBuiltinsV1Tests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_cli_permission_priority_and_prompt_joining(self) -> None:
-        with patch.object(sys, "argv", ["nano-code", "--yolo", "--dont-ask", "hello", "world"]):
+        with patch.object(sys, "argv", ["nanocode", "--yolo", "--dont-ask", "hello", "world"]):
             args = parse_args()
 
         self.assertEqual(_resolve_permission_mode(args), "bypassPermissions")
@@ -47,11 +51,23 @@ class CliModelsBuiltinsV1Tests(unittest.TestCase):
         async def no_sleep(_delay):
             return None
 
-        with patch("nano_code.agent.models.asyncio.sleep", new=no_sleep):
+        with patch("nanocode.runtime.agent.models.asyncio.sleep", new=no_sleep):
             result = asyncio.run(_with_retry(flaky, max_retries=2))
 
         self.assertEqual(result, "ok")
         self.assertEqual(calls["count"], 2)
+
+    def test_model_retry_does_not_retry_missing_model_errors(self) -> None:
+        calls = {"count": 0}
+
+        async def missing_model():
+            calls["count"] += 1
+            raise MissingModelError("model_not_found: No available channel for model")
+
+        with self.assertRaises(MissingModelError):
+            asyncio.run(_with_retry(missing_model, max_retries=2))
+
+        self.assertEqual(calls["count"], 1)
 
     def test_openai_tool_conversion_preserves_schema(self) -> None:
         converted = _to_openai_tools([

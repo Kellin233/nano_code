@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import unittest
 
-from nano_code.agent import Agent
-from nano_code.skill import SkillDefinition, SkillInvocationResult
+from nanocode.runtime.agent import Agent
+from nanocode.domains.skills import SkillDefinition, SkillInvocationResult
 
 
 class AgentSkillIntegrationTests(unittest.TestCase):

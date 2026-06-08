@@ -2,11 +2,11 @@
 
 ## 本章目标
 
-> 本教程已按当前仓库整理为 Python-only 版本：本项目实现均位于 `nano_code/`，命令入口为 `nano-code` 或 `python -m nano_code`。涉及 Claude Code 上游源码时，只作为架构对照；真正要阅读和运行的代码都在本仓库的 Python 文件里。
+> 本教程已按当前仓库整理为 Python-only 版本：本项目实现均位于 `nanocode/`，命令入口为 `nanocode` 或 `python -m nanocode`。涉及 Claude Code 上游源码时，只作为架构对照；真正要阅读和运行的代码都在本仓库的 Python 文件里。
 
 理解项目定位、技术栈选择和整体架构，5 分钟内跑起来你自己的编程智能体。
 
-这份教程不是 API 手册，也不是把源码逐行翻译一遍。更合适的读法是：先知道一次请求会经过哪些模块，再回到代码里看每个模块为什么只负责这一小块。读完本章后，你应该能打开 `nano_code/agent/` 不再害怕它的结构，因为你知道里面大致分成：初始化、会话入口、事件流循环、压缩、工具执行、子智能体、Anthropic 后端、OpenAI 兼容后端这几段。
+这份教程不是 API 手册，也不是把源码逐行翻译一遍。更合适的读法是：先知道一次请求会经过哪些模块，再回到代码里看每个模块为什么只负责这一小块。读完本章后，你应该能打开 `nanocode/agent/` 不再害怕它的结构，因为你知道里面大致分成：初始化、会话入口、事件流循环、压缩、工具执行、子智能体、Anthropic 后端、OpenAI 兼容后端这几段。
 
 ## 为什么要从零造？
 
@@ -26,7 +26,7 @@ Claude Code 是一个质的飞跃。你说"给这个项目加用户注册功能"
 
 这并不表示代码变得不重要。恰恰相反，Agent 程序里的代码负责划清边界：模型可以提出“我要读这个文件”“我要运行测试”“我要编辑这一段”，但真正能不能执行、怎么执行、执行结果怎么回到上下文，都由代码控制。你可以把模型看成驾驶员，把工具系统、权限系统、上下文管理看成车辆本身的方向盘、刹车和仪表盘。
 
-在当前 Python 版里，这个边界主要体现在 `nano_code/agent/`、`nano_code/tools/`、`nano_code/permissions/` 和 `nano_code/hooks/`。`agent` 负责会话入口和事件流循环，`tools` 负责强 Tool 契约与执行适配，`permissions` 负责统一安全策略，`hooks` 负责把用户可配置的拦截点接入主循环。模型只能通过这些定义好的工具影响真实世界，不能直接越过代码去操作文件系统。
+在当前 Python 版里，这个边界主要体现在 `nanocode/agent/`、`nanocode/tools/`、`nanocode/permissions/` 和 `nanocode/hooks/`。`agent` 负责会话入口和事件流循环，`tools` 负责强 Tool 契约与执行适配，`permissions` 负责统一安全策略，`hooks` 负责把用户可配置的拦截点接入主循环。模型只能通过这些定义好的工具影响真实世界，不能直接越过代码去操作文件系统。
 
 整个系统的核心是一个 `while (true)` 循环：
 
@@ -109,43 +109,43 @@ graph TB
 
 各组件职责：
 
-- **`nano_code/__main__.py`**：解析命令行参数，提供交互式 REPL
-- **`nano_code/agent/core.py`**：`Agent` 门面，负责初始化、对外 API 和事件渲染
-- **`nano_code/agent/engine.py`**：一次用户提交的入口，负责 MCP 初始化、UserPromptSubmit/Stop hooks、会话保存
-- **`nano_code/agent/loop.py`**：事件流主循环，负责调用模型、收集工具调用、把工具结果写回消息历史
-- **`nano_code/agent/events.py`**：主循环对外产出的事件协议，CLI/UI 不再直接耦合后端细节
-- **`nano_code/tools/base.py` / `nano_code/tools/registry.py` / `nano_code/tools/runtime.py`**：Tool 契约、注册表和统一执行管线
-- **`nano_code/permissions/`**：权限规则、workspace 边界、protected path、shell 风险检测
-- **`nano_code/hooks/`**：命令式 hooks 配置、匹配和执行
-- **`nano_code/memory/` / `nano_code/skill/`**：记忆和技能模块，两者都能注入系统提示词或通过工具被调用
-- **`nano_code/subagent.py`**：子智能体类型配置，当前规划能力通过只读 `plan` 子 agent 提供
-- **`nano_code/mcp_client.py`**：MCP 协议客户端，通过标准输入输出上的 JSON-RPC 连接外部工具服务器
-- **`nano_code/session.py`**：把对话历史写到磁盘，支持 `--resume` 恢复
-- **`nano_code/ui.py`**：终端颜色和格式化输出
+- **`nanocode/__main__.py`**：解析命令行参数，提供交互式 REPL
+- **`nanocode/agent/core.py`**：`Agent` 门面，负责初始化、对外 API 和事件渲染
+- **`nanocode/agent/engine.py`**：一次用户提交的入口，负责 MCP 初始化、UserPromptSubmit/Stop hooks、会话保存
+- **`nanocode/agent/loop.py`**：事件流主循环，负责调用模型、收集工具调用、把工具结果写回消息历史
+- **`nanocode/agent/events.py`**：主循环对外产出的事件协议，CLI/UI 不再直接耦合后端细节
+- **`nanocode/tools/base.py` / `nanocode/tools/registry.py` / `nanocode/tools/runtime.py`**：Tool 契约、注册表和统一执行管线
+- **`nanocode/permissions/`**：权限规则、workspace 边界、protected path、shell 风险检测
+- **`nanocode/hooks/`**：命令式 hooks 配置、匹配和执行
+- **`nanocode/memory/` / `nanocode/skill/`**：记忆和技能模块，两者都能注入系统提示词或通过工具被调用
+- **`nanocode/subagent.py`**：子智能体类型配置，当前规划能力通过只读 `plan` 子 agent 提供
+- **`nanocode/mcp_client.py`**：MCP 协议客户端，通过标准输入输出上的 JSON-RPC 连接外部工具服务器
+- **`nanocode/session.py`**：把对话历史写到磁盘，支持 `--resume` 恢复
+- **`nanocode/ui.py`**：终端颜色和格式化输出
 
 | 模块 | 职责 |
 |------|------|
-| `nano_code/agent/` | Agent 门面、事件流主循环、后端适配、循环状态 |
-| `nano_code/tools/` | Tool 契约、schema 注册、内置工具适配、统一运行时 |
-| `nano_code/permissions/` | deny/allow 规则、权限模式、workspace 和 shell 安全检查 |
-| `nano_code/hooks/` | `UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` hooks |
-| `nano_code/sandbox/` | 可选沙箱后端配置与执行入口 |
-| `nano_code/memory/` | 记忆存储、召回、渲染和压缩 |
-| `nano_code/skill/` | 技能发现、激活、提示词注入和工具调用 |
-| `nano_code/__main__.py` | CLI 参数、REPL、本地命令分流 |
-| `nano_code/prompt.py` | 系统提示词构造：模板、项目规则、记忆/技能注入 |
-| `nano_code/session.py` | 会话持久化 |
+| `nanocode/agent/` | Agent 门面、事件流主循环、后端适配、循环状态 |
+| `nanocode/tools/` | Tool 契约、schema 注册、内置工具适配、统一运行时 |
+| `nanocode/permissions/` | deny/allow 规则、权限模式、workspace 和 shell 安全检查 |
+| `nanocode/hooks/` | `UserPromptSubmit`、`PreToolUse`、`PostToolUse`、`Stop` hooks |
+| `nanocode/sandbox/` | 可选沙箱后端配置与执行入口 |
+| `nanocode/memory/` | 记忆存储、召回、渲染和压缩 |
+| `nanocode/skill/` | 技能发现、激活、提示词注入和工具调用 |
+| `nanocode/__main__.py` | CLI 参数、REPL、本地命令分流 |
+| `nanocode/prompt.py` | 系统提示词构造：模板、项目规则、记忆/技能注入 |
+| `nanocode/session.py` | 会话持久化 |
 
 ## 第一次读代码的路线
 
 如果你是第一次看这个项目，不建议从 `agent.py` 第 1 行一直读到最后。那样很容易被流式输出、双后端、预算控制这些细节打断。更舒服的路线是按一次真实请求走：
 
-1. 先看 `nano_code/__main__.py` 的 `main()`：命令行参数如何变成一个 `Agent` 实例。
+1. 先看 `nanocode/__main__.py` 的 `main()`：命令行参数如何变成一个 `Agent` 实例。
 2. 接着看 `run_repl()`：用户输入一行文字后，最终只是调用 `await agent.chat(text)`。
-3. 跳到 `nano_code/agent/core.py` 的 `chat()`：这里消费事件流并把事件渲染到终端。
-4. 看 `nano_code/agent/engine.py` 和 `nano_code/agent/loop.py`：这里才是一次请求的主干，包含 hooks、模型调用、工具调用和消息历史更新。
-5. 工具真正怎么执行，去 `nano_code/tools/runtime.py` 看 `ToolRuntime`；权限为什么会拦截，接着看 `nano_code/permissions/policy.py`。
-6. 如果好奇模型为什么知道有哪些工具、项目规则和记忆，回到 `nano_code/prompt.py` 的 `build_system_prompt()`。
+3. 跳到 `nanocode/agent/core.py` 的 `chat()`：这里消费事件流并把事件渲染到终端。
+4. 看 `nanocode/agent/engine.py` 和 `nanocode/agent/loop.py`：这里才是一次请求的主干，包含 hooks、模型调用、工具调用和消息历史更新。
+5. 工具真正怎么执行，去 `nanocode/tools/runtime.py` 看 `ToolRuntime`；权限为什么会拦截，接着看 `nanocode/permissions/policy.py`。
+6. 如果好奇模型为什么知道有哪些工具、项目规则和记忆，回到 `nanocode/prompt.py` 的 `build_system_prompt()`。
 
 这条线读完后，你再看记忆、技能、子智能体和 MCP，就不会觉得它们是额外魔法。它们本质上只是给主循环增加更多上下文或更多工具。
 
@@ -172,7 +172,7 @@ git clone https://github.com/Windy3f3f3f3f/claude-code-from-scratch.git
 cd claude-code-from-scratch
 pip install -e .
 export ANTHROPIC_API_KEY=sk-ant-xxx
-nano-code "hello"
+nanocode "hello"
 ```
 
 启动后：
@@ -186,37 +186,37 @@ nano-code "hello"
 >
 ```
 
-试试 `read nano_code/agent/loop.py and explain the main loop`。
+试试 `read nanocode/agent/loop.py and explain the main loop`。
 
 ### 其他选项
 
 ```bash
-nano-code --yolo "run all tests"          # 跳过普通确认，但不绕过 deny/protected path
-nano-code --accept-edits "refactor"       # 自动批准普通文件编辑
-nano-code --dont-ask "check style"        # 需确认的操作自动拒绝
-nano-code --thinking "analyze this bug"   # 启用 Extended Thinking
-nano-code --resume                        # 恢复上次会话
-nano-code --max-cost 0.50 --max-turns 20  # 预算控制
+nanocode --yolo "run all tests"          # 跳过普通确认，但不绕过 deny/protected path
+nanocode --accept-edits "refactor"       # 自动批准普通文件编辑
+nanocode --dont-ask "check style"        # 需确认的操作自动拒绝
+nanocode --thinking "analyze this bug"   # 启用 Extended Thinking
+nanocode --resume                        # 恢复上次会话
+nanocode --max-cost 0.50 --max-turns 20  # 预算控制
 ```
 
 ## 各章概览
 
-| 章节 | nano-code 文件 | Claude Code 对应模块 |
+| 章节 | nanocode 文件 | Claude Code 对应模块 |
 |------|-----------------|---------------------|
 | **Phase 1: 构建一个可用的编程智能体** | | |
-| [1. 智能体循环](01-agent-loop.md) | `nano_code/agent/engine.py` + `nano_code/agent/loop.py` | 查询循环 |
-| [2. 工具系统](02-tools.md) | `nano_code/tools/base.py` + `nano_code/tools/runtime.py` | Tool 抽象 + 内置工具 |
-| [3. 系统提示词](03-system-prompt.md) | `nano_code/prompt.py` | 提示词模板与 CLAUDE.md 加载 |
-| [4. CLI 与会话](04-cli-session.md) | `nano_code/__main__.py` + `nano_code/session.py` | CLI 入口与命令 |
-| [5. 流式输出](05-streaming.md) | `nano_code/agent/backends.py` + `nano_code/agent/events.py` | API streaming 服务 |
-| [6. 权限与安全](06-permissions.md) | `nano_code/permissions/` + `nano_code/tools/runtime.py` | `src/utils/permissions/` (52KB) |
-| [7. 上下文管理](07-context.md) | `nano_code/agent/context.py` | `src/services/compact/` |
+| [1. 智能体循环](01-agent-loop.md) | `nanocode/agent/engine.py` + `nanocode/agent/loop.py` | 查询循环 |
+| [2. 工具系统](02-tools.md) | `nanocode/tools/base.py` + `nanocode/tools/runtime.py` | Tool 抽象 + 内置工具 |
+| [3. 系统提示词](03-system-prompt.md) | `nanocode/prompt.py` | 提示词模板与 CLAUDE.md 加载 |
+| [4. CLI 与会话](04-cli-session.md) | `nanocode/__main__.py` + `nanocode/session.py` | CLI 入口与命令 |
+| [5. 流式输出](05-streaming.md) | `nanocode/agent/backends.py` + `nanocode/agent/events.py` | API streaming 服务 |
+| [6. 权限与安全](06-permissions.md) | `nanocode/permissions/` + `nanocode/tools/runtime.py` | `src/utils/permissions/` (52KB) |
+| [7. 上下文管理](07-context.md) | `nanocode/agent/context.py` | `src/services/compact/` |
 | **Phase 2: 进阶能力** | | |
-| [8. 记忆系统](08-memory.md) | `nano_code/memory/` | memory 模块 |
-| [9. 技能系统](09-skills.md) | `nano_code/skill/` | skills 模块 + SkillTool |
+| [8. 记忆系统](08-memory.md) | `nanocode/memory/` | memory 模块 |
+| [9. 技能系统](09-skills.md) | `nanocode/skill/` | skills 模块 + SkillTool |
 | [10. Plan Mode](10-plan-mode.md) | 历史设计记录，当前源码已删除全局 Plan Mode | `EnterPlanMode` / `ExitPlanMode` |
-| [11. 多 Agent](11-multi-agent.md) | `nano_code/subagent.py` + `nano_code/tools/registry.py` | `src/tools/AgentTool/` |
-| [12. MCP 集成](12-mcp.md) | `nano_code/mcp_client.py` | MCP client 服务 |
+| [11. 多 Agent](11-multi-agent.md) | `nanocode/subagent.py` + `nanocode/tools/registry.py` | `src/tools/AgentTool/` |
+| [12. MCP 集成](12-mcp.md) | `nanocode/mcp_client.py` | MCP client 服务 |
 | [13. 架构对比](13-whats-next.md) | 全局对比 | 全局对比 |
 | [15. 代码导读](15-code-reading-guide.md) | 全部 Python 文件 | 从一次请求串起所有模块 |
 
@@ -226,7 +226,7 @@ nano-code --max-cost 0.50 --max-turns 20  # 预算控制
 
 ## 本章小结：这章应该建立什么心智模型
 
-这一章最重要的不是记住每个文件名，而是先建立一个整体模型：**nano-code 是一个“模型决策 + 代码执行”的系统**。模型负责判断下一步要读文件、搜索、编辑还是运行命令；代码负责把这些动作变成受控工具调用，并在必要时做 hooks、权限检查、结果截断和会话保存。
+这一章最重要的不是记住每个文件名，而是先建立一个整体模型：**nanocode 是一个“模型决策 + 代码执行”的系统**。模型负责判断下一步要读文件、搜索、编辑还是运行命令；代码负责把这些动作变成受控工具调用，并在必要时做 hooks、权限检查、结果截断和会话保存。
 
 实现上，这个模型落在三条线里。第一条是入口线：`__main__.py` 接收用户输入并调用 `Agent.chat()`。第二条是循环线：`agent/engine.py` 和 `agent/loop.py` 调 API、产出事件、执行工具、把结果塞回消息历史。第三条是能力线：`tools/`、`permissions/`、`hooks/`、`memory/`、`skill/`、`subagent.py`、`mcp_client.py` 给循环提供更多可用能力。
 

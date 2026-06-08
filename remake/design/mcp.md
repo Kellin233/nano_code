@@ -2,7 +2,7 @@
 
 ## 目标
 
-把当前 `nano_code/nano_code/mcp_client.py` 从“能连接 stdio MCP server 的最小 JSON-RPC 客户端”，重构成稳定、可诊断、可扩展的 MCP 子系统。
+把当前 `src/mcp_client.py` 从“能连接 stdio MCP server 的最小 JSON-RPC 客户端”，重构成稳定、可诊断、可扩展的 MCP 子系统。
 
 本轮重构重点：
 
@@ -25,7 +25,7 @@
 建议结构：
 
 ```text
-nano_code/nano_code/
+src/
 ├── mcp_client.py              # 兼容导出 McpManager
 └── mcp/
     ├── __init__.py
@@ -377,7 +377,7 @@ MCP result 常见结构：
 落盘目录：
 
 ```text
-~/.nano-code/mcp-outputs/
+~/.nanocode/mcp-outputs/
 ```
 
 文件名：
@@ -672,7 +672,7 @@ sanitize 后两个工具可能变成同名。
 
 解决：
 
-- 启动时确保 `~/.nano-code/mcp-outputs` 存在。
+- 启动时确保 `~/.nanocode/mcp-outputs` 存在。
 - 写文件失败时回退为文本摘要。
 - 返回绝对路径。
 

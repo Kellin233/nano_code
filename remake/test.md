@@ -4,21 +4,22 @@
 
 ## 结论
 
-本轮补充了 `nano_code/test/v1/` 下的复杂场景和异常场景测试，并重新执行编译与全量单元测试。
+本轮补充了 `nanocode/test/v1/` 下的复杂场景和异常场景测试，并重新执行编译与全量单元测试。
 
 总体结果：通过。
 
 执行结果：
 
 ```bash
-python -m compileall nano_code/nano_code
+python -m pip install -e .
+python -m compileall src test
 # PASS
 
-PYTHONPATH=nano_code python -m unittest discover -s nano_code/test/v1 -v
+python -m unittest discover -s test/v1 -v
 # Ran 21 tests
 # OK
 
-PYTHONPATH=nano_code python -m unittest discover -s nano_code/test -v
+python -m unittest discover -s test -v
 # Ran 76 tests
 # OK
 ```
@@ -29,7 +30,7 @@ PYTHONPATH=nano_code python -m unittest discover -s nano_code/test -v
 
 ## 新增测试文件
 
-新增测试均位于 `nano_code/test/v1/`：
+新增测试均位于 `test/v1/`：
 
 - `test_agent_event_loop_v1.py`
 - `test_cli_models_builtins_v1.py`
@@ -38,7 +39,7 @@ PYTHONPATH=nano_code python -m unittest discover -s nano_code/test -v
 - `test_registry_mcp_v1.py`
 - `test_tool_runtime_v1.py`
 
-`nano_code/test/v1/__init__.py` 仅用于 `unittest discover` 从 `nano_code/test` 顶层递归发现 v1 测试。
+`test/v1/__init__.py` 仅用于 `unittest discover` 从 `test` 顶层递归发现 v1 测试。
 
 ## 模块测试结果
 

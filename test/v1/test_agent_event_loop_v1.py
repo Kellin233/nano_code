@@ -8,8 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nano_code.agent import Agent
-from nano_code.hooks.types import HookOutput
+from nanocode.runtime.agent import Agent
+from nanocode.domains.hooks.types import HookOutput
 
 
 def _message(content, input_tokens: int = 1, output_tokens: int = 1):

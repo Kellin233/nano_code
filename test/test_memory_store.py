@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nano_code.memory.store import (
+from nanocode.domains.memory.store import (
     get_memory,
     get_memory_dir,
     list_memories,
@@ -14,7 +14,7 @@ from nano_code.memory.store import (
     mark_accessed,
     save_memory,
 )
-from nano_code.tools.builtin import write_file
+from nanocode.domains.tools.builtin import write_file
 
 
 class IsolatedMemoryTest(unittest.TestCase):
@@ -68,9 +68,9 @@ User prefers simple, maintainable implementations.
             "Nano Code Memory",
             "Memory design preference",
             "feedback",
-            "User wants nano_code memory to stay simple and file-backed.",
-            keywords=["nano_code", "memory"],
-            entities=["nano_code"],
+            "User wants nanocode memory to stay simple and file-backed.",
+            keywords=["nanocode", "memory"],
+            entities=["nanocode"],
             topics=["memory management"],
             timestamp="2026-06-05T00:00:00+00:00",
             importance=0.8,
@@ -78,7 +78,7 @@ User prefers simple, maintainable implementations.
 
         mem_dir = get_memory_dir()
         raw = (mem_dir / filename).read_text()
-        self.assertIn("keywords: nano_code, memory", raw)
+        self.assertIn("keywords: nanocode, memory", raw)
         self.assertNotIn("keywords: [", raw)
 
         mark_accessed([str(mem_dir / filename)])

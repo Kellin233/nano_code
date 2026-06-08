@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nano_code.memory.rendering import build_memory_prompt_section, format_memories_for_injection
-from nano_code.memory.store import save_memory
-from nano_code.memory.types import RelevantMemory
+from nanocode.domains.memory.rendering import build_memory_prompt_section, format_memories_for_injection
+from nanocode.domains.memory.store import save_memory
+from nanocode.domains.memory.types import RelevantMemory
 
 
 class IsolatedMemoryTest(unittest.TestCase):
@@ -58,8 +58,8 @@ class MemoryRenderingTests(IsolatedMemoryTest):
             "Memory Refactor Preference",
             "User wants low-intrusion memory refactor",
             "feedback",
-            "User wants nano_code memory refactor to avoid heavy dependencies.",
-            keywords=["nano_code", "memory"],
+            "User wants nanocode memory refactor to avoid heavy dependencies.",
+            keywords=["nanocode", "memory"],
         )
 
         prompt = build_memory_prompt_section()

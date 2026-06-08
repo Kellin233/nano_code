@@ -82,12 +82,12 @@ context 模块的职责是管理这五层的边界和注入时机。它不应该
 
 ### 模块结构
 
-当前 `nano_code/prompt.py` 应保留为兼容门面，但不再承载主要逻辑。
+当前 `nanocode/prompt.py` 应保留为兼容门面，但不再承载主要逻辑。
 
 推荐结构：
 
 ```text
-nano_code/
+nanocode/
 ├── prompt.py                  # 兼容入口：build_system_prompt / build_prompt_bundle
 ├── context/
 │   ├── __init__.py
@@ -103,8 +103,8 @@ nano_code/
 
 说明：
 
-- `nano_code/context/` 负责构造和渲染上下文。
-- `nano_code/agent/context.py` 负责在 agent 运行时把上下文放入消息历史，并维护压缩状态。
+- `nanocode/context/` 负责构造和渲染上下文。
+- `nanocode/agent/context.py` 负责在 agent 运行时把上下文放入消息历史，并维护压缩状态。
 - `prompt.py` 只保留对外 API，避免旧调用点全部重写。
 
 不要再新增 `prompt/` 包。项目已经有 `prompt.py` 文件，改成同名包会带来无意义迁移成本。
@@ -251,7 +251,7 @@ SYSTEM_PROMPT_DYNAMIC_BOUNDARY = "__NANO_CODE_SYSTEM_PROMPT_DYNAMIC_BOUNDARY__"
 Startup context for this Nano Code session.
 
 Current date: 2026-06-07.
-Working directory: /root/EvoCode/nano_code.
+Working directory: /root/EvoCode/nanocode.
 Platform: Linux x86_64.
 Shell: /bin/bash.
 
@@ -592,7 +592,7 @@ compact 后如果 active skills 不重挂，模型会忘记当前技能约束。
 ## 实施步骤
 
 1. 删除 `remake/design/prompt.md`，以后只维护 `context.md`。
-2. 保留 `nano_code/prompt.py` 作为兼容门面。
+2. 保留 `nanocode/prompt.py` 作为兼容门面。
 3. 确认 `context/system_prompt.py` 不包含动态内容。
 4. 确认 `context/startup.py` 生成一次性 startup context。
 5. 完善 `context/claude_md.py` 的 include、rules、预算、diagnostics。
