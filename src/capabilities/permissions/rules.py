@@ -5,9 +5,12 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from typing import Any
 
+Rule = dict[str, str | None]
+PermissionRules = dict[str, list[Rule]]
 
-_cached_rules: dict | None = None
+_cached_rules: PermissionRules | None = None
 
 
 def _parse_rule(rule: str) -> dict[str, str | None]:
@@ -23,22 +26,23 @@ def _matches_tool(rule_tool: str, tool_name: str) -> bool:
     return rule_tool.startswith("mcp__") and tool_name.startswith(rule_tool + "__")
 
 
-def _load_settings(file_path: Path) -> dict | None:
+def _load_settings(file_path: Path) -> dict[str, Any] | None:
     if not file_path.exists():
         return None
     try:
-        return json.loads(file_path.read_text())
+        data = json.loads(file_path.read_text())
+        return data if isinstance(data, dict) else None
     except Exception:
         return None
 
 
-def load_permission_rules() -> dict[str, list[dict[str, str | None]]]:
+def load_permission_rules() -> PermissionRules:
     global _cached_rules
     if _cached_rules is not None:
         return _cached_rules
 
-    allow: list[dict] = []
-    deny: list[dict] = []
+    allow: list[Rule] = []
+    deny: list[Rule] = []
     for path in (Path.home() / ".claude" / "settings.json", Path.cwd() / ".claude" / "settings.json"):
         settings = _load_settings(path)
         if not settings or "permissions" not in settings:
@@ -56,17 +60,18 @@ def reset_permission_cache() -> None:
     _cached_rules = None
 
 
-def matches_rule(rule: dict, tool_name: str, inp: dict) -> bool:
-    if not _matches_tool(rule["tool"], tool_name):
+def matches_rule(rule: Rule, tool_name: str, inp: dict) -> bool:
+    rule_tool = rule.get("tool") or ""
+    if not _matches_tool(rule_tool, tool_name):
         return False
     if rule["pattern"] is None:
         return True
 
     value = ""
     if tool_name == "run_shell":
-        value = inp.get("command", "")
+        value = str(inp.get("command", ""))
     elif "file_path" in inp:
-        value = inp["file_path"]
+        value = str(inp["file_path"])
     else:
         return True
 

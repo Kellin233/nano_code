@@ -16,10 +16,10 @@ if TYPE_CHECKING:
 class TuiState:
     """Mutable session state owned by the interactive TUI."""
 
-    agent: "RuntimeThread"
-    renderer: "TuiRenderer"
-    input: "TuiInput"
-    commands: "CommandRegistry | None" = None
+    agent: RuntimeThread
+    renderer: TuiRenderer
+    input: TuiInput
+    commands: CommandRegistry | None = None
     should_exit: bool = False
     multiline: bool = False
     processing: bool = False
@@ -32,15 +32,15 @@ class CommandContext:
     state: TuiState
 
     @property
-    def agent(self) -> "RuntimeThread":
+    def agent(self) -> RuntimeThread:
         return self.state.agent
 
     @property
-    def renderer(self) -> "TuiRenderer":
+    def renderer(self) -> TuiRenderer:
         return self.state.renderer
 
     @property
-    def input(self) -> "TuiInput":
+    def input(self) -> TuiInput:
         return self.state.input
 
 

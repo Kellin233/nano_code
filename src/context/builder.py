@@ -18,16 +18,15 @@ from __future__ import annotations
 import os
 import platform
 import sys
+from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
-from typing import Iterable
 
 from .sources import (
-    load_project_instructions,
-    collect_git_context,
-    PromptDiagnostic,
-    ContextAttachment,
     PromptBundle,
+    PromptDiagnostic,
+    collect_git_context,
+    load_project_instructions,
 )
 
 # ─── System Prompt ──────────────────────────────
@@ -117,7 +116,7 @@ def build_startup_context(
 ) -> str:
     cwd = cwd or Path.cwd()
     current_date = (today or date.today()).isoformat()
-    shell = (os.environ.get("ComSpec") or "cmd.exe") if sys.platform == "win32" else os.environ.get("SHELL", "/bin/sh")
+    shell = (os.environ.get("COMSPEC") or "cmd.exe") if sys.platform == "win32" else os.environ.get("SHELL", "/bin/sh")
     lines = [
         "<system-reminder>",
         "Startup context for this Nano Code session.",

@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-
 HookEventName = Literal["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop"]
 HookAction = Literal["allow", "deny", "modify", "append_context"]
 

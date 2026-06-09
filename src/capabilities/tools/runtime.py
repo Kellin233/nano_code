@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-import os
 import asyncio
+import contextlib
+import os
 import time
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from ..hooks import HookInput, HookManager
 from ..permissions import check_permission
+from .builtin import edit_file, grep_search, list_files, read_file, web_fetch, write_file
+from .registry import ToolRegistry
 from .types import (
     DEFAULT_SHELL_TIMEOUT_MS,
     LARGE_RESULT_BYTES,
@@ -19,8 +23,6 @@ from .types import (
     ToolContext,
     ToolResult,
 )
-from .builtin import edit_file, grep_search, list_files, read_file, web_fetch, write_file
-from .registry import ToolRegistry
 
 
 def _truncate_result(result: str) -> str:
@@ -132,16 +134,15 @@ class ToolRuntime:
         )
         if decision.action == "deny":
             return ToolResult(f"Action denied: {decision.message}", is_error=True)
-        if decision.action == "confirm" and decision.message:
-            if decision.message not in self.confirmed:
-                if self.event_callback:
-                    from ...runtime.events import PermissionRequested
+        if decision.action == "confirm" and decision.message and decision.message not in self.confirmed:
+            if self.event_callback:
+                from ...runtime.events import PermissionRequested
 
-                    await self.event_callback(PermissionRequested(call, decision.message))
-                confirmed = await self._confirm(decision.message)
-                if not confirmed:
-                    return ToolResult("User denied this action.", is_error=True)
-                self.confirmed.add(decision.message)
+                await self.event_callback(PermissionRequested(call, decision.message))
+            confirmed = await self._confirm(decision.message)
+            if not confirmed:
+                return ToolResult("User denied this action.", is_error=True)
+            self.confirmed.add(decision.message)
 
         result = await tool.call(inp, ctx)
         result = self._persist_large_result(call.name, result)
@@ -211,10 +212,8 @@ async def execute_builtin_tool(
         result = read_file(inp)
         if read_file_state is not None and not result.startswith("Error"):
             abs_path = str(Path(inp["file_path"]).resolve())
-            try:
+            with contextlib.suppress(OSError):
                 read_file_state[abs_path] = os.path.getmtime(abs_path)
-            except OSError:
-                pass
         return _truncate_result(result)
 
     if name in ("write_file", "edit_file") and read_file_state is not None:
@@ -249,9 +248,7 @@ async def execute_builtin_tool(
 
     if name in ("write_file", "edit_file") and read_file_state is not None and not result.startswith("Error"):
         abs_path = str(Path(inp["file_path"]).resolve())
-        try:
+        with contextlib.suppress(OSError):
             read_file_state[abs_path] = os.path.getmtime(abs_path)
-        except OSError:
-            pass
 
     return result

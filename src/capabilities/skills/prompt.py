@@ -6,8 +6,8 @@
 
 from __future__ import annotations
 
-from .runtime import SkillInvocation
 from .registry import discover_skills, get_default_registry
+from .runtime import SkillInvocation
 from .types import SkillDefinition
 
 

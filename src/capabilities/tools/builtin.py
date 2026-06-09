@@ -225,7 +225,7 @@ def write_file(inp: dict) -> str:
         _auto_update_memory_index(str(path))
         lines = inp["content"].split("\n")
         line_count = len(lines)
-        preview = "\n".join(f"{i+1:4d} | {l}" for i, l in enumerate(lines[:30]))
+        preview = "\n".join(f"{i+1:4d} | {line}" for i, line in enumerate(lines[:30]))
         trunc = f"\n  ... ({line_count} lines total)" if line_count > 30 else ""
         return f"Successfully wrote to {inp['file_path']} ({line_count} lines)\n\n{preview}{trunc}"
     except Exception as e:
@@ -263,10 +263,10 @@ def _generate_diff(old_content: str, old_string: str, new_string: str) -> str:
     new_lines = new_string.split("\n")
 
     parts = [f"@@ -{line_num},{len(old_lines)} +{line_num},{len(new_lines)} @@"]
-    for l in old_lines:
-        parts.append(f"- {l}")
-    for l in new_lines:
-        parts.append(f"+ {l}")
+    for line in old_lines:
+        parts.append(f"- {line}")
+    for line in new_lines:
+        parts.append(f"+ {line}")
     return "\n".join(parts)
 
 
@@ -323,17 +323,15 @@ def grep_search(inp: dict) -> str:
 
     if not IS_WIN:
         try:
-            args = ["grep", "--line-number", "--color=never", "-r"]
+            args = ["grep", "--line-number", "--color=never", "-r", "-E"]
             if include:
                 args.append(f"--include={include}")
             args.extend(["--", pattern, path])
             result = subprocess.run(
                 args, capture_output=True, text=True, timeout=10
             )
-            if result.returncode == 1:
-                return "No matches found."
             if result.returncode == 0:
-                lines = [l for l in result.stdout.split("\n") if l]
+                lines = [line for line in result.stdout.split("\n") if line]
                 output = "\n".join(lines[:MAX_GREP_RESULTS])
                 if len(lines) > MAX_GREP_RESULTS:
                     output += f"\n... and {len(lines) - 100} more matches"
@@ -352,6 +350,19 @@ def _grep_python(pattern: str, directory: str, include: str | None) -> str:
     include_pattern = include
     matches: list[str] = []
 
+    def search_file(file_path: str) -> None:
+        if include_pattern and not fnmatch.fnmatch(os.path.basename(file_path), include_pattern):
+            return
+        try:
+            text = Path(file_path).read_text(errors="replace")
+            for i, line in enumerate(text.split("\n")):
+                if regex.search(line):
+                    matches.append(f"{file_path}:{i+1}:{line}")
+                    if len(matches) >= MAX_GREP_MATCHES:
+                        return
+        except (OSError, UnicodeDecodeError):
+            pass
+
     def walk(d: str) -> None:
         if len(matches) >= MAX_GREP_MATCHES:
             return
@@ -366,19 +377,12 @@ def _grep_python(pattern: str, directory: str, include: str | None) -> str:
             if os.path.isdir(full):
                 walk(full)
                 continue
-            if include_pattern and not fnmatch.fnmatch(name, include_pattern):
-                continue
-            try:
-                text = Path(full).read_text(errors="replace")
-                for i, line in enumerate(text.split("\n")):
-                    if regex.search(line):
-                        matches.append(f"{full}:{i+1}:{line}")
-                        if len(matches) >= MAX_GREP_MATCHES:
-                            return
-            except (OSError, UnicodeDecodeError):
-                pass
+            search_file(full)
 
-    walk(directory)
+    if os.path.isfile(directory):
+        search_file(directory)
+    else:
+        walk(directory)
     if not matches:
         return "No matches found."
     output = "\n".join(matches[:MAX_GREP_RESULTS])

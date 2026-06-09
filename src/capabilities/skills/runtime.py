@@ -17,9 +17,8 @@ import time
 from pathlib import Path
 
 from ...context.sources import parse_frontmatter
-from .registry import get_default_registry, SkillRegistry
+from .registry import SkillRegistry, get_default_registry
 from .types import ActiveSkill, SkillDefinition, SkillInvocationResult
-
 
 # ─── Skill 调用 ──────────────────────────────────
 

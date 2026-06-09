@@ -11,8 +11,9 @@ import json
 import math
 import re
 import time
+from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
 from .store import get_memory_dir, list_memories, load_memory_index
 from .types import (

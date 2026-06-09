@@ -15,7 +15,7 @@ class HookManager:
         self._hooks = hooks or []
 
     @classmethod
-    def capture(cls, *, include_project_hooks: bool | None = None) -> "HookManager":
+    def capture(cls, *, include_project_hooks: bool | None = None) -> HookManager:
         include_project = (
             os.environ.get("NANO_CODE_TRUST_PROJECT_HOOKS") == "1"
             if include_project_hooks is None

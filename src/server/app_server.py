@@ -9,15 +9,15 @@ from typing import Any
 from ..models import DEFAULT_MODEL
 from ..protocol.messages import (
     APPROVAL_RESOLVE,
-    ProtocolError,
-    ProtocolRequest,
-    ProtocolResponse,
     SESSION_LIST,
     THREAD_ABORT,
     THREAD_COMPACT,
     THREAD_CREATE,
     THREAD_RESUME,
     THREAD_SUBMIT,
+    ProtocolError,
+    ProtocolRequest,
+    ProtocolResponse,
 )
 from ..runtime import ApprovalDecision, RuntimeConfig, RuntimeThread
 from ..session import list_sessions, load_session

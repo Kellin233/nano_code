@@ -18,3 +18,5 @@ dist/
 .github/
 remake/
 test/
+CLAUDE.md
+AGENTS.md

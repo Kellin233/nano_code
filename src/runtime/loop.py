@@ -10,20 +10,19 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
-from pathlib import Path
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from ..backend.base import Backend
 from ..capabilities.hooks.types import HookInput
-from ..capabilities.tools.types import ToolCall, ToolContext, ToolResult
 from ..capabilities.tools.runtime import ToolRuntime
+from ..capabilities.tools.types import ToolCall, ToolContext, ToolResult
 from .events import (
-    RuntimeEvent,
     AssistantTextDelta,
     BudgetExceeded,
     LoopFinished,
-    PermissionRequested,
+    RuntimeEvent,
     ToolCallFinished,
     ToolCallStarted,
 )
@@ -42,7 +41,7 @@ class AgentLoop:
 
     @property
     def use_openai(self) -> bool:
-        return self.agent.config.use_openai
+        return bool(self.agent.config.use_openai)
 
     async def run(self, user_message: str) -> AsyncIterator[RuntimeEvent]:
         """执行一次完整对话轮次，产出 RuntimeEvent 流。"""
@@ -87,17 +86,53 @@ class AgentLoop:
             # 调用模型
             thinking_mode = self.backend.resolve_thinking_mode(agent.thinking)
             try:
-                response = await self.backend.call(
-                    messages=agent.messages,
-                    system=agent.system_prompt,
-                    tools=agent.tool_definitions(),
-                    on_text_delta=lambda text: self._on_text(text),
-                    thinking_mode=thinking_mode,
+                text_events: asyncio.Queue[RuntimeEvent] = asyncio.Queue()
+
+                async def on_text_delta(text: str, queue: asyncio.Queue[RuntimeEvent] = text_events) -> None:
+                    await queue.put(AssistantTextDelta(text))
+
+                call_task = asyncio.create_task(
+                    self.backend.call(
+                        messages=agent.messages,
+                        system=agent.system_prompt,
+                        tools=agent.tool_definitions(),
+                        on_text_delta=on_text_delta,
+                        thinking_mode=thinking_mode,
+                    )
                 )
+                agent._current_task = call_task
+
+                while not call_task.done():
+                    try:
+                        event = await asyncio.wait_for(text_events.get(), timeout=0.05)
+                    except asyncio.TimeoutError:
+                        if agent.aborted:
+                            call_task.cancel()
+                            break
+                        continue
+                    yield event
+                    if agent.aborted:
+                        call_task.cancel()
+                        break
+
+                while not text_events.empty():
+                    yield text_events.get_nowait()
+
+                if agent.aborted:
+                    call_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await call_task
+                    yield LoopFinished("aborted")
+                    return
+
+                response = await call_task
             except Exception as exc:
                 yield RuntimeEvent(type="runtime.error", payload={"message": str(exc)})
                 yield LoopFinished("error")
                 return
+            finally:
+                if getattr(agent, "_current_task", None) is locals().get("call_task"):
+                    agent._current_task = None
 
             agent.last_api_call_time = time.time()
             agent.record_usage(response.usage.input_tokens, response.usage.output_tokens)
@@ -146,10 +181,6 @@ class AgentLoop:
             # 刷新附件
             agent.flush_pending_attachments()
 
-    async def _on_text(self, text: str) -> None:
-        """文本增量回调——通过事件队列发出。"""
-        self.agent._emit_text(text)
-
     def _append_assistant_message(self, response) -> None:
         """将 BackendResponse 的内容追加到消息历史。"""
         if self.use_openai:
@@ -170,7 +201,6 @@ class AgentLoop:
             self.agent._openai_messages.append(msg)
         else:
             # Anthropic 格式
-            import json
             content: list[dict] = []
             if response.text:
                 content.append({"type": "text", "text": response.text})

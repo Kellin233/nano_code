@@ -22,7 +22,6 @@ from ..capabilities.tools.types import (
     BUDGET_MEDIUM,
     BUDGET_UTILIZATION_THRESHOLD,
     COMPACT_SUMMARY_MAX_TOKENS,
-    COMPACT_UTILIZATION_THRESHOLD,
     KEEP_RECENT_RESULTS,
     MICROCOMPACT_IDLE_S,
     SNIP_THRESHOLD,
@@ -43,7 +42,7 @@ class Compressor:
 
     @property
     def use_openai(self) -> bool:
-        return self.agent.config.use_openai
+        return bool(self.agent.config.use_openai)
 
     # ─── 压缩流水线 ────────────────────────────────
 

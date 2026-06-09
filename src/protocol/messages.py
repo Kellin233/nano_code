@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-
 THREAD_CREATE = "thread.create"
 THREAD_RESUME = "thread.resume"
 THREAD_SUBMIT = "thread.submit"
@@ -45,7 +44,7 @@ class ProtocolRequest:
     params: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def from_message(cls, data: ProtocolMessage) -> "ProtocolRequest":
+    def from_message(cls, data: ProtocolMessage) -> ProtocolRequest:
         return cls(
             id=data.get("id"),
             method=str(data.get("method", "")),

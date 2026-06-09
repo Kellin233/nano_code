@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+import contextlib
 import math
 import os
 import shutil
@@ -11,8 +11,10 @@ import subprocess
 import sys
 import tempfile
 import unicodedata
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Any
 
 
 def _cell_width(text: str) -> int:
@@ -80,12 +82,13 @@ class TuiInput:
         *,
         history_file: Path | None = None,
         force_simple: bool = False,
-        input_fn=input,
-        output=None,
+        input_fn: Callable[[str], str] = input,
+        output: Any = None,
     ):
         self.history_file = history_file or Path.home() / ".nanocode" / "input-history"
         self.input_fn = input_fn
         self.output = output
+        self._toolkit: dict[str, Any] = {}
         self.multiline = False
         self._completer = _SimpleCompleter()
         self._composer_layout = ComposerLayout()
@@ -140,10 +143,8 @@ class TuiInput:
                 return None
             return tmp_path.read_text()
         finally:
-            try:
+            with contextlib.suppress(OSError):
                 tmp_path.unlink()
-            except OSError:
-                pass
 
     def _init_prompt_toolkit(self) -> None:
         if os.environ.get("CI") or not sys.stdin.isatty():
@@ -188,11 +189,12 @@ class TuiInput:
     def _prompt_toolkit_read(self, prompt: str) -> str | None:
         try:
             app = self._build_application(prompt)
-            return app.run(handle_sigint=False)
+            result = app.run(handle_sigint=False)
+            return str(result) if result is not None else None
         except EOFError:
             return None
 
-    def _build_application(self, prompt: str):
+    def _build_application(self, prompt: str) -> Any:
         tk = self._toolkit
         Buffer = tk["Buffer"]
         BufferControl = tk["BufferControl"]

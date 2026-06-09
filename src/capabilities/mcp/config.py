@@ -129,7 +129,7 @@ def _parse_server_config(
 def _expand_env(value: Any, source: Path, diagnostics: list[McpDiagnostic]) -> str:
     text = str(value)
 
-    def replace(match: re.Match) -> str:
+    def replace(match: re.Match[str]) -> str:
         key = match.group(1)
         default = match.group(2)
         if key in os.environ:

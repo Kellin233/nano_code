@@ -2,23 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
+import contextlib
 import copy
 import os
 from pathlib import Path
-from typing import Any
 
-from .types import (
-    DEFAULT_SHELL_TIMEOUT_MS,
-    MAX_RESULT_CHARS,
-    FunctionTool,
-    Tool,
-    ToolContext,
-    ToolDef,
-    ToolMetadata,
-    ToolOrigin,
-    ToolResult,
-)
 from .builtin import (
     CONCURRENCY_SAFE_BUILTIN_TOOLS,
     EDIT_TOOL_NAMES,
@@ -30,6 +18,17 @@ from .builtin import (
     read_file,
     web_fetch,
     write_file,
+)
+from .types import (
+    DEFAULT_SHELL_TIMEOUT_MS,
+    MAX_RESULT_CHARS,
+    FunctionTool,
+    Tool,
+    ToolContext,
+    ToolDef,
+    ToolMetadata,
+    ToolOrigin,
+    ToolResult,
 )
 
 INTERNAL_SCHEMA_KEYS = {
@@ -62,10 +61,8 @@ def _truncate_result(result: str) -> str:
 
 def _mark_read(path: str, ctx: ToolContext) -> None:
     abs_path = str(Path(path).resolve())
-    try:
+    with contextlib.suppress(OSError):
         ctx.read_file_state[abs_path] = os.path.getmtime(abs_path)
-    except OSError:
-        pass
 
 
 def _needs_read_first(name: str, inp: dict, ctx: ToolContext) -> str | None:
@@ -204,7 +201,7 @@ class ToolRegistry:
             self.add_many(tools, origin="builtin")
 
     @classmethod
-    def with_builtin_tools(cls) -> "ToolRegistry":
+    def with_builtin_tools(cls) -> ToolRegistry:
         registry = cls()
         registry.add_many(builtin_tool_definitions(), origin="builtin")
         return registry
@@ -295,13 +292,13 @@ class ToolRegistry:
                 for part in query[len("select:"):].replace(",", " ").split()
                 if part.strip()
             }
-            matches: list[ToolDef] = []
+            selected_matches: list[ToolDef] = []
             for name, tool in self._tools.items():
                 metadata = self._metadata[name]
                 if metadata.deferred and name not in self._activated_deferred and name in selected:
                     self._activated_deferred.add(name)
-                    matches.append(tool.to_definition())
-            return matches
+                    selected_matches.append(tool.to_definition())
+            return selected_matches
 
         tokens = [token for token in query.lower().split() if token]
         server_filters = [token[1:] for token in tokens if token.startswith("+") and len(token) > 1]

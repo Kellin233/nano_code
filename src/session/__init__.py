@@ -8,7 +8,6 @@ from typing import Any
 
 from .artifacts import ArtifactRef, ArtifactStore
 from .event_store import SessionEventStore
-from .snapshots import SnapshotStore
 
 SESSION_DIR = Path.home() / ".nanocode" / "sessions"
 
@@ -28,7 +27,8 @@ def load_session(session_id: str) -> dict[str, Any] | None:
     if not path.exists():
         return None
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
     except Exception:
         return None
 
@@ -66,7 +66,6 @@ __all__ = [
     "ArtifactRef",
     "ArtifactStore",
     "SessionEventStore",
-    "SnapshotStore",
     "get_latest_session_id",
     "list_sessions",
     "load_session",

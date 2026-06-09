@@ -13,9 +13,10 @@ constants.py（全部工具相关常量）。
 from __future__ import annotations
 
 import inspect
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Literal, Protocol
+from typing import Any, Literal, Protocol
 
 # ─── 类型别名 ──────────────────────────────────
 

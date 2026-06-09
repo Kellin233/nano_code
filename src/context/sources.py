@@ -161,6 +161,13 @@ class _GitRun:
 
 
 def _run_git(command: list[str], cwd: Path, timeout: float) -> _GitRun:
+    def timeout_output(value: bytes | str | None) -> str:
+        if value is None:
+            return ""
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace").strip()
+        return value.strip()
+
     try:
         proc = subprocess.run(
             ["git", "--no-optional-locks", *command],
@@ -172,7 +179,7 @@ def _run_git(command: list[str], cwd: Path, timeout: float) -> _GitRun:
         )
         return _GitRun(proc.returncode, proc.stdout.strip(), proc.stderr.strip())
     except subprocess.TimeoutExpired as exc:
-        return _GitRun(124, exc.stdout or "", "timeout")
+        return _GitRun(124, timeout_output(exc.stdout), "timeout")
     except Exception as exc:
         return _GitRun(1, "", str(exc))
 

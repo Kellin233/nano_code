@@ -39,7 +39,7 @@ class RuntimeEvent:
         }
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "RuntimeEvent":
+    def from_dict(cls, data: dict[str, Any]) -> RuntimeEvent:
         return cls(
             type=str(data.get("type", "")),
             thread_id=str(data.get("thread_id", "")),

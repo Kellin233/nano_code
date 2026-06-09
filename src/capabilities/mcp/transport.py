@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import subprocess
 from typing import Any
@@ -47,20 +48,14 @@ class StdioTransport:
         process = self.process
         self.process = None
         if process.stdin:
-            try:
+            with contextlib.suppress(Exception):
                 process.stdin.close()
-            except Exception:
-                pass
         if process.returncode is None:
-            try:
+            with contextlib.suppress(ProcessLookupError):
                 process.terminate()
-            except ProcessLookupError:
-                pass
             try:
                 await asyncio.wait_for(process.wait(), timeout=timeout)
             except asyncio.TimeoutError:
-                try:
+                with contextlib.suppress(ProcessLookupError):
                     process.kill()
-                except ProcessLookupError:
-                    pass
                 await process.wait()

@@ -11,7 +11,6 @@ from pathlib import Path
 
 from ...context.sources import parse_frontmatter
 from ..tools.builtin import builtin_tool_definitions
-from ..tools.types import ToolDef
 
 # ─── 只读工具（供探索和规划智能体使用）──────────
 # Explore / Plan 子智能体只拿到这三个工具的 schema。
@@ -106,7 +105,7 @@ def _load_agents_from_dir(directory: Path, agents: dict[str, dict]) -> None:
     if not directory.is_dir():
         return
     for entry in directory.iterdir():
-        if not entry.suffix == ".md":
+        if entry.suffix != ".md":
             continue
         try:
             raw = entry.read_text()

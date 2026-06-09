@@ -6,8 +6,9 @@ import asyncio
 import contextlib
 import json
 from collections import deque
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .config import build_server_env
 from .output import format_call_result

@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
-import re
 from pathlib import Path
-from typing import Iterable
 
 from rich.console import Console
 from rich.markup import escape

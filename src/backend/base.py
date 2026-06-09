@@ -7,8 +7,8 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Callable, Awaitable
 
 from ..capabilities.tools.types import ToolCall
 
@@ -56,6 +56,11 @@ class Backend(ABC):
     def supports_adaptive_thinking(self, model: str) -> bool:
         """检查模型是否支持 adaptive thinking。"""
         ...
+
+    def resolve_thinking_mode(self, thinking_enabled: bool) -> str:
+        """Return provider-specific thinking mode for a request."""
+        _ = thinking_enabled
+        return "disabled"
 
 
 __all__ = ["Backend", "BackendResponse", "TokenUsage"]

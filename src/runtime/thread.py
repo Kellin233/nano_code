@@ -12,9 +12,9 @@ from collections.abc import AsyncIterator
 from ..session import ArtifactStore, SessionEventStore
 from ..tui.renderer import get_renderer
 from .agent import Agent, RuntimeConfig
-from .loop import AgentLoop
 from .approvals import ApprovalManager, ConfirmFn
 from .events import RuntimeEvent, TurnResult
+from .loop import AgentLoop
 
 
 class RuntimeThread:

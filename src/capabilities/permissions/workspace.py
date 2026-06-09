@@ -6,7 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
-
 PathAction = Literal["allow", "confirm", "deny"]
 
 

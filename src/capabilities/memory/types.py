@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-
 VALID_TYPES = {"user", "feedback", "project", "reference"}
 VALID_STATUSES = {"active", "superseded", "archived"}
 

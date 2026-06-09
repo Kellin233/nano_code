@@ -7,13 +7,14 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import cast
 
 import openai
 
-from .base import Backend, BackendResponse, TokenUsage
 from ..capabilities.tools.types import ToolCall
-from ..models import model_supports_thinking, model_supports_adaptive_thinking, to_openai_tools, with_retry
+from ..models import model_supports_adaptive_thinking, model_supports_thinking, to_openai_tools, with_retry
+from .base import Backend, BackendResponse, TokenUsage
 
 
 class OpenAIBackend(Backend):
@@ -110,4 +111,4 @@ class OpenAIBackend(Backend):
                 ),
             )
 
-        return await with_retry(_do)
+        return cast(BackendResponse, await with_retry(_do))

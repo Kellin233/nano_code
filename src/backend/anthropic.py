@@ -7,13 +7,19 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Callable, Awaitable
+from collections.abc import Awaitable, Callable
+from typing import Any, cast
 
 import anthropic
 
+from ..capabilities.tools.types import DEFAULT_MAX_TOKENS, ToolCall
+from ..models import (
+    get_max_output_tokens,
+    model_supports_adaptive_thinking,
+    model_supports_thinking,
+    with_retry,
+)
 from .base import Backend, BackendResponse, TokenUsage
-from ..capabilities.tools.types import DEFAULT_MAX_TOKENS
-from ..models import get_max_output_tokens, model_supports_adaptive_thinking, model_supports_thinking, to_openai_tools, with_retry
 
 
 class AnthropicBackend(Backend):
@@ -136,7 +142,7 @@ class AnthropicBackend(Backend):
                 ),
             )
 
-        return await with_retry(_do)
+        return cast(BackendResponse, await with_retry(_do))
 
     @staticmethod
     def block_to_dict(block) -> dict:
@@ -152,6 +158,3 @@ class AnthropicBackend(Backend):
             }
         return {"type": block.type}
 
-
-# 兼容别名，引用自 backend 模块顶层导入
-from ..capabilities.tools.types import ToolCall  # noqa: E402, F811

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Awaitable, Callable, Literal
+from typing import Literal
 
 ApprovalStatus = Literal["approved", "denied"]
 ConfirmFn = Callable[[str], Awaitable[bool]]

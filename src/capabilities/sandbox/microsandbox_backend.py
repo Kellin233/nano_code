@@ -6,6 +6,7 @@ import asyncio
 import importlib
 import importlib.util
 import uuid
+from typing import Any, cast
 
 from .types import CommandResult, SandboxConfig, text_or_empty
 
@@ -35,7 +36,7 @@ class MicrosandboxBackend:
                 "sandbox extra or run `pip install microsandbox`, or use --sandbox local."
             )
 
-        module = importlib.import_module("microsandbox")
+        module = cast(Any, importlib.import_module("microsandbox"))
         Sandbox = module.Sandbox
         Volume = module.Volume
         Network = getattr(module, "Network", None)
@@ -58,10 +59,8 @@ class MicrosandboxBackend:
             kwargs["network"] = Network.none()
 
         try:
-            self._sandbox = await asyncio.wait_for(
-                Sandbox.create(self.sandbox_name, **kwargs),
-                timeout=self.config.startup_timeout_s,
-            )
+            create_result = cast(Any, Sandbox.create(self.sandbox_name, **kwargs))
+            self._sandbox = await asyncio.wait_for(create_result, timeout=self.config.startup_timeout_s)  # type: ignore[func-returns-value]
         except Exception as e:
             raise RuntimeError(
                 f"failed to start microsandbox {self.sandbox_name!r} with image "

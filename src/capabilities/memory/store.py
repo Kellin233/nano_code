@@ -13,9 +13,9 @@ from ...context.sources import format_frontmatter, parse_frontmatter
 from .types import (
     MAX_INDEX_BYTES,
     MAX_INDEX_LINES,
-    MemoryEntry,
     VALID_STATUSES,
     VALID_TYPES,
+    MemoryEntry,
 )
 
 INDEX_FILENAME = "MEMORY.md"

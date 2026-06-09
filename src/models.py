@@ -18,8 +18,7 @@ import time
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from .capabilities.tools.types import DEFAULT_MAX_TOKENS, MAX_RETRIES, MAX_RETRY_DELAY_MS
-from .capabilities.tools.types import ToolDef
+from .capabilities.tools.types import DEFAULT_MAX_TOKENS, MAX_RETRIES, MAX_RETRY_DELAY_MS, ToolDef
 from .tui.renderer import get_renderer
 
 # ─── 默认模型 ────────────────────────────────────
@@ -49,9 +48,7 @@ def model_supports_thinking(model: str) -> bool:
     m = model.lower()
     if "claude-3-" in m or "3-5-" in m or "3-7-" in m:
         return False
-    if "claude" in m and any(x in m for x in ("opus", "sonnet", "haiku")):
-        return True
-    return False
+    return "claude" in m and any(x in m for x in ("opus", "sonnet", "haiku"))
 
 
 def model_supports_adaptive_thinking(model: str) -> bool:
@@ -83,9 +80,7 @@ def is_retryable(error: Exception) -> bool:
     status = getattr(error, "status_code", None) or getattr(error, "status", None)
     if status in (429, 503, 529):
         return True
-    if "overloaded" in msg or "ECONNRESET" in msg or "ETIMEDOUT" in msg:
-        return True
-    return False
+    return "overloaded" in msg or "ECONNRESET" in msg or "ETIMEDOUT" in msg
 
 
 async def with_retry(fn: Callable[[], Awaitable[Any]], max_retries: int = MAX_RETRIES) -> Any:

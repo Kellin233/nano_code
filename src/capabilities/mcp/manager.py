@@ -7,8 +7,9 @@ import copy
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from ...logging_config import get_logger
 from .config import load_mcp_configs
@@ -254,7 +255,7 @@ def _shorten_name(value: str, server_name: str, tool_name: str, limit: int = 120
 
 
 def _hash_suffix(server_name: str, tool_name: str) -> str:
-    return hashlib.sha1(f"{server_name}\0{tool_name}".encode("utf-8")).hexdigest()[:8]
+    return hashlib.sha1(f"{server_name}\0{tool_name}".encode()).hexdigest()[:8]
 
 
 def _tool_signature(tool: McpToolDef) -> str:

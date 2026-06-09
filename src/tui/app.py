@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import asyncio
-from contextlib import suppress
-from pathlib import Path
 import signal
 import sys
 import time
+from contextlib import suppress
+from pathlib import Path
 
 from ..capabilities.skills import get_skill_by_name
 from .commands import CommandRegistry, default_commands
@@ -56,10 +56,8 @@ class TuiApp:
     def _prepare(self) -> None:
         self.agent.set_confirm_fn(lambda message: self.input.confirm(message))
         self._refresh_completions()
-        try:
+        with suppress(ValueError):
             signal.signal(signal.SIGINT, self._handle_sigint)
-        except ValueError:
-            pass
 
     async def _read_line(self) -> str | None:
         try:

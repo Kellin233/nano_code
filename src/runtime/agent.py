@@ -17,18 +17,17 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Awaitable
 
-from ..capabilities.tools.registry import ToolRegistry
-from ..capabilities.tools.builtin import builtin_tool_definitions
-from ..capabilities.tools.types import ToolDef
-from ..capabilities.tools.types import CONTEXT_WINDOW_MARGIN
-from ..capabilities.sandbox import SandboxConfig, SandboxManager
-from ..capabilities.mcp.manager import McpManager
 from ..capabilities.hooks import HookManager
+from ..capabilities.mcp.manager import McpManager
+from ..capabilities.sandbox import SandboxConfig, SandboxManager
 from ..capabilities.skills.runtime import ActiveSkillManager, SkillInvocation
+from ..capabilities.tools.builtin import builtin_tool_definitions
+from ..capabilities.tools.registry import ToolRegistry
+from ..capabilities.tools.types import CONTEXT_WINDOW_MARGIN, ToolDef
 from ..models import get_context_window
 
 
@@ -222,7 +221,7 @@ class Agent:
 
     def add_assistant_message(self, content: list[dict]) -> None:
         if self.config.use_openai:
-            self._openai_messages.append(content)
+            self._openai_messages.append({"role": "assistant", "content": content})
         else:
             self._anthropic_messages.append({"role": "assistant", "content": content})
 
@@ -369,8 +368,8 @@ class Agent:
 
         if not self.is_sub_agent:
             try:
-                from ..context.builder import render_skill_listing_attachment
                 from ..capabilities.skills.registry import discover_skills
+                from ..context.builder import render_skill_listing_attachment
 
                 attachment, sent = render_skill_listing_attachment(
                     discover_skills(),
@@ -401,7 +400,6 @@ class Agent:
         prev_out = self.total_output_tokens
 
         # 延迟导入避免循环
-        from ..backend.base import Backend
         from ..backend import create_backend
 
         backend = create_backend(
@@ -441,7 +439,7 @@ class Agent:
         """启动异步记忆召回。子 Agent 不触发记忆系统。"""
         if self.is_sub_agent:
             return None
-        from ..capabilities.memory.retrieval import MemoryPrefetch, start_memory_prefetch
+        from ..capabilities.memory.retrieval import start_memory_prefetch
 
         side_query = self._build_side_query()
         if not side_query:

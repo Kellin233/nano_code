@@ -73,7 +73,7 @@ def _near_duplicate_actions(
 
     for memory_type, group in by_type.items():
         threshold = FEEDBACK_DUPLICATE_THRESHOLD if memory_type == "feedback" else NEAR_DUPLICATE_THRESHOLD
-        alive = set(entry.filename for entry in group)
+        alive = {entry.filename for entry in group}
         token_sets = {entry.filename: set(_tokenize(entry.content)) for entry in group}
         for i, left in enumerate(group):
             if left.filename not in alive or len(token_sets[left.filename]) < 8:

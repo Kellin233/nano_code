@@ -101,11 +101,7 @@ def resolve_profile(
     elif profile == "read-only":
         backend = "bwrap"
         workspace_mode = "read-only"
-    elif profile == "local":
-        backend = "local"
-        workspace_mode = "full-access"
-        default_network = "default"
-    elif profile == "danger-full-access":
+    elif profile == "local" or profile == "danger-full-access":
         backend = "local"
         workspace_mode = "full-access"
         default_network = "default"

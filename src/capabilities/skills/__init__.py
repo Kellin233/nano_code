@@ -4,7 +4,6 @@
 外部模块优先从这里导入，避免依赖包内具体文件结构。
 """
 
-from .runtime import ActiveSkillManager, SkillInvocation
 from .prompt import build_skill_descriptions, execute_skill, resolve_skill_prompt
 from .registry import (
     SkillRegistry,
@@ -13,6 +12,7 @@ from .registry import (
     get_skill_by_name,
     reset_skill_cache,
 )
+from .runtime import ActiveSkillManager, SkillInvocation
 from .types import ActiveSkill, SkillDefinition, SkillInvocationResult
 
 __all__ = [

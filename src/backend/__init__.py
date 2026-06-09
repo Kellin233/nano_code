@@ -1,7 +1,7 @@
 """Backend 模块 — 模型后端策略类。"""
 
-from .base import Backend, BackendResponse, TokenUsage
 from .anthropic import AnthropicBackend
+from .base import Backend, BackendResponse, TokenUsage
 from .openai import OpenAIBackend
 
 
