@@ -1,59 +1,55 @@
 # MCP 集成
 
-## 为什么需要 MCP
+## 1. 为什么需要 MCP
 
-内置工具有限——read_file、write_file、run_shell——但用户可能需要"查 GitHub Issues"、"读数据库"、"调 API"。不可能在 Agent 里内建所有工具。MCP（Model Context Protocol）让外部服务以标准协议暴露工具给 Agent。
+内置工具有限——不能"查 GitHub Issues"、"读数据库"。MCP（Model Context Protocol）让外部服务以标准协议暴露工具给 Agent。server 是独立进程，通过 stdio JSON-RPC 通信。
 
-## 核心概念
+## 2. 核心概念
 
-### 协议栈
+### 2.1 协议栈
+
+`McpManager`（多 server 管理）→ `McpConnection`（单 server 生命周期）→ `StdioTransport`（子进程 stdin/stdout）。
+
+### 2.2 工具注册
+
+MCP 工具用 `mcp__server__tool` 命名注册到 ToolRegistry。默认 deferred——模型通过 `tool_search` 按需激活。`notifications/tools/list_changed` 触发 debounced refresh。
+
+## 3. 总体设计
 
 ```
-McpManager（多 server 管理、工具聚合）
-    ↓
-McpConnection（单 server 生命周期、initialize、tools/call）
-    ↓
-StdioTransport（子进程 stdin/stdout JSON-RPC）
+capabilities/mcp/
+├── config.py       # 配置加载（.claude.json/settings.json/.mcp.json）
+├── transport.py    # stdio 子进程 + JSON-RPC
+├── connection.py   # 单 server 生命周期（initialize/tools/call）
+├── manager.py      # 多 server 管理 + 工具聚合 + 回调
+├── output.py       # 结果结构化处理（文本/图片/blob）
+└── resources.py    # resources/list + resources/read
 ```
 
-MCP server 是独立进程——通过 stdio 的 JSON-RPC 通信。当前只支持 stdio transport。http/sse/ws 配置可解析但不连接。
+## 4. 详细设计
 
-### 工具命名
+**`config.py`**：从 `~/.claude.json`、`settings.json`、`.mcp.json` 加载。`${VAR}` 和 `${VAR:-default}` 展开。优先级：项目覆盖用户。
 
-MCP 工具注册到 ToolRegistry 时用 `mcp__server__tool` 命名——避免和内置工具冲突。sanitize 处理：非 `[A-Za-z0-9_-]` 字符替换为 `_`，连续 `_` 合并，太长截断加 hash。
+**`transport.py`**：`StdioTransport` 管理子进程生命周期。stderr ring buffer（最多 200 行）用于诊断。
 
-### 工具变更通知
+**`connection.py`**：initialize 握手、tools/list、tools/call。request id 竞态修复——先注册 future 再发送请求。关闭顺序：cancel reader→close stdin→terminate→wait→kill。
 
-MCP server 可以通过 `notifications/tools/list_changed` 通知工具列表变化。`McpManager` 收到后标记 server 工具 dirty，debounced refresh（延迟 0.2s），计算 added/removed/changed，通过 callback 通知 Agent 更新 ToolRegistry。
+**`manager.py`**：`McpManager` 管理多 server。`_make_prefixed_name()` sanitize 命名。`load_and_connect()` 首次连接。`on_tools_changed` 回调通知 Agent。
 
-## 设计决策
+## 5. 设计决策
 
 ### 为什么 MCP 工具默认 deferred
 
-MCP server 可能暴露几十上百个工具。全部加载到 system prompt 浪费 token。deferred 让工具默认不可见，模型通过 `tool_search` 按需激活。alwaysLoad 的 server 除外。
+MCP server 可能暴露几十上百工具——全部加载浪费 token。deferred + tool_search 按需激活。
 
-### 为什么只支持 stdio transport
+### 为什么只支持 stdio
 
-Stdio 最可靠——启动子进程，读 stdin/stdout。HTTP/SSE/WebSocket 需要额外依赖（httpx、websockets）和处理重连、认证等复杂度。当前先做好一个 transport，以后按需扩展。
+Stdio 最可靠——子进程，stdin/stdout。HTTP/SSE 需要额外依赖和重连逻辑。先做好一个，以后扩展。
 
-### 为什么 MCP 不放进 tools.runtime
+## 6. 面试考点
 
-MCP 连接生命周期（启动进程、握手、心跳）和工具执行管线是不同的关注点。tools.runtime 负责"执行工具"的通用流程（验证→权限→执行），MCP 工具执行时由 ToolRegistry 路由到 `ctx.mcp_manager.call_tool()`——MCP 模块只提供"怎么调 MCP 工具"，不参与执行管线。
+**Q: MCP server 崩溃了怎么办？** 当前无自动重连。连接断开后工具调用返回错误。加重连在 roadmap。
 
-## 代码走读
+## 7. 代码导读
 
-**`config.py`**：从 `~/.claude.json`、`settings.json`、`.mcp.json` 加载 server 配置，`${VAR}` 环境变量展开。
-
-**`transport.py`**：stdio 子进程 + JSON-RPC request/response + stderr ring buffer。
-
-**`connection.py`**：initialize 握手、tools/list、tools/call、通知处理。request id 竞态修复。
-
-**`manager.py`**：多 server 管理、前缀命名、工具刷新回调、资源聚合。
-
-**`output.py`**：结构化输出处理——文本/图片/blob/大结果落盘到 `~/.nanocode/mcp-outputs/`。
-
-## 面试考点
-
-**Q: MCP server 进程崩溃了怎么办？**
-
-当前没有自动重连。`McpManager` 会标记连接断开，工具调用返回错误。未来可以加重连机制（roadmap 中）。
+**关键代码**：`config.py` load_mcp_configs()、`connection.py` _send_request() 竞态修复、`manager.py` load_and_connect()。
