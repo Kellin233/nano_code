@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from nanocode.domains.tools import ToolCall, ToolContext, ToolRegistry, ToolRuntime
+from nanocode.capabilities.tools import ToolCall, ToolContext, ToolRegistry, ToolRuntime
 
 
 class FakeMcpManager:

@@ -1,35 +1,6 @@
-"""Runtime capability adapters.
+"""能力模块 — Agent 的可插拔能力集合。
 
-Domain logic stays in `nanocode.domains`. The modules under
-`capabilities/` only connect those domains to the runtime lifecycle.
+每个子模块（tools/mcp/skills/hooks/memory/sandbox/permissions/subagents）
+遵循共同模板：types.py（数据模型）+ 引擎文件（按独立变更原因拆分）。
+之前分离的 domains/ 和 capabilities/ 两层现已合并。
 """
-
-from .hooks.provider import HooksCapabilityProvider
-from .mcp.provider import McpCapabilityProvider
-from .memory.provider import MemoryCapabilityProvider
-from .skills.provider import SkillsCapabilityProvider
-from .subagents.provider import SubagentsCapabilityProvider
-from .tools.provider import ToolsCapabilityProvider
-from ..runtime.capability import CapabilityManager
-
-
-def default_capability_manager() -> CapabilityManager:
-    return CapabilityManager([
-        ToolsCapabilityProvider(),
-        MemoryCapabilityProvider(),
-        SkillsCapabilityProvider(),
-        McpCapabilityProvider(),
-        HooksCapabilityProvider(),
-        SubagentsCapabilityProvider(),
-    ])
-
-
-__all__ = [
-    "HooksCapabilityProvider",
-    "McpCapabilityProvider",
-    "MemoryCapabilityProvider",
-    "SkillsCapabilityProvider",
-    "SubagentsCapabilityProvider",
-    "ToolsCapabilityProvider",
-    "default_capability_manager",
-]

@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.domains.memory.consolidation import consolidate_memories
-from nanocode.domains.memory.store import get_memory, get_memory_dir, list_memories, save_memory
+from nanocode.capabilities.memory.consolidation import consolidate_memories
+from nanocode.capabilities.memory.store import get_memory, get_memory_dir, list_memories, save_memory
 
 
 class IsolatedMemoryTest(unittest.TestCase):

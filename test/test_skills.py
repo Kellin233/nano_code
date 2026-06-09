@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.domains.skills import (
+from nanocode.capabilities.skills import (
     ActiveSkillManager,
     SkillInvocation,
     SkillRegistry,
@@ -270,7 +270,7 @@ two body
 
 class DefaultRegistryPathTests(unittest.TestCase):
     def test_default_registry_uses_home_and_cwd(self) -> None:
-        from nanocode.domains.skills import discover_skills, reset_skill_cache
+        from nanocode.capabilities.skills import discover_skills, reset_skill_cache
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -300,7 +300,7 @@ body
             self.assertEqual([s.name for s in skills], ["local"])
 
     def test_build_skill_descriptions_lists_each_skill_once_with_invocation_modes(self) -> None:
-        from nanocode.domains.skills import build_skill_descriptions, reset_skill_cache
+        from nanocode.capabilities.skills import build_skill_descriptions, reset_skill_cache
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -1,3 +1,9 @@
-from .provider import HooksCapabilityProvider
+"""Command hook support."""
 
-__all__ = ["HooksCapabilityProvider"]
+from __future__ import annotations
+
+from .config import HookManager
+from .types import HookInput, HookOutput
+
+__all__ = ["HookInput", "HookManager", "HookOutput"]
+

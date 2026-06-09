@@ -8,9 +8,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.__main__ import _resolve_permission_mode, parse_args
-from nanocode.runtime.agent.models import _to_openai_tools, _with_retry
-from nanocode.domains.tools.builtin import grep_search, list_files
+from nanocode.cli.args import resolve_permission_mode, parse_args
+from nanocode.models import to_openai_tools, with_retry
+from nanocode.capabilities.tools.builtin import grep_search, list_files
 
 
 class RetryableError(Exception):
@@ -36,7 +36,7 @@ class CliModelsBuiltinsV1Tests(unittest.TestCase):
         with patch.object(sys, "argv", ["nanocode", "--yolo", "--dont-ask", "hello", "world"]):
             args = parse_args()
 
-        self.assertEqual(_resolve_permission_mode(args), "bypassPermissions")
+        self.assertEqual(resolve_permission_mode(args), "bypassPermissions")
         self.assertEqual(args.prompt, ["hello", "world"])
 
     def test_model_retry_retries_only_retryable_errors(self) -> None:
@@ -51,8 +51,8 @@ class CliModelsBuiltinsV1Tests(unittest.TestCase):
         async def no_sleep(_delay):
             return None
 
-        with patch("nanocode.runtime.agent.models.asyncio.sleep", new=no_sleep):
-            result = asyncio.run(_with_retry(flaky, max_retries=2))
+        with patch("nanocode.models.asyncio.sleep", new=no_sleep):
+            result = asyncio.run(with_retry(flaky, max_retries=2))
 
         self.assertEqual(result, "ok")
         self.assertEqual(calls["count"], 2)
@@ -65,12 +65,12 @@ class CliModelsBuiltinsV1Tests(unittest.TestCase):
             raise MissingModelError("model_not_found: No available channel for model")
 
         with self.assertRaises(MissingModelError):
-            asyncio.run(_with_retry(missing_model, max_retries=2))
+            asyncio.run(with_retry(missing_model, max_retries=2))
 
         self.assertEqual(calls["count"], 1)
 
     def test_openai_tool_conversion_preserves_schema(self) -> None:
-        converted = _to_openai_tools([
+        converted = to_openai_tools([
             {
                 "name": "read_file",
                 "description": "Read",

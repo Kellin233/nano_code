@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable
 
-from ..domains.memory.store import list_memories
-from ..domains.skills import discover_skills
+from ..capabilities.memory.store import list_memories
+from ..capabilities.skills import discover_skills
 from .state import CommandContext, CommandResult
 
 CommandHandler = Callable[[CommandContext, str], Awaitable[CommandResult]]

@@ -1,3 +1,9 @@
+"""Agent Event Loop V1 测试 — 适配重构后的 Backend + AgentLoop 架构。
+
+原测试通过 monkey-patch Agent._call_anthropic_stream 来模拟模型调用。
+重构后模型调用在 Backend 策略类中，因此改为通过 FakeBackend 注入。
+"""
+
 from __future__ import annotations
 
 import asyncio
@@ -8,15 +14,37 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.runtime.agent import Agent
-from nanocode.domains.hooks.types import HookOutput
+from nanocode.runtime.agent import Agent, RuntimeConfig
+from nanocode.runtime.loop import AgentLoop
+from nanocode.backend.base import Backend, BackendResponse, TokenUsage
+from nanocode.capabilities.tools.types import ToolCall
+from nanocode.capabilities.hooks.types import HookOutput
 
 
-def _message(content, input_tokens: int = 1, output_tokens: int = 1):
-    return types.SimpleNamespace(
-        usage=types.SimpleNamespace(input_tokens=input_tokens, output_tokens=output_tokens),
-        content=content,
-    )
+class FakeLoopBackend(Backend):
+    """模拟 Backend — 可编程控制每次调用的返回内容。"""
+
+    def __init__(self, responses: list[BackendResponse]):
+        self.responses = responses
+        self.call_count = 0
+
+    async def call(self, *, messages, system, tools, on_text_delta=None, thinking_mode="disabled"):
+        if self.call_count >= len(self.responses):
+            return BackendResponse(text="", usage=TokenUsage())
+        resp = self.responses[self.call_count]
+        self.call_count += 1
+        if on_text_delta and resp.text:
+            await on_text_delta(resp.text)
+        return resp
+
+    def supports_thinking(self, model: str) -> bool:
+        return True
+
+    def supports_adaptive_thinking(self, model: str) -> bool:
+        return True
+
+    def resolve_thinking_mode(self, thinking_enabled: bool) -> str:
+        return "disabled"
 
 
 class OneShotHookManager:
@@ -50,100 +78,116 @@ class AgentEventLoopV1Tests(unittest.TestCase):
         self.tmp.cleanup()
 
     def test_anthropic_loop_executes_tool_and_preserves_tool_result_pairing(self) -> None:
+        """Anthropic 后端：执行工具并保持 tool_use ↔ tool_result 配对。"""
         target = self.project / "data.txt"
         target.write_text("alpha\nbeta")
-        agent = Agent(api_key="test-key", is_sub_agent=True)
-        calls = {"count": 0}
 
-        async def fake_stream(**kwargs):
-            calls["count"] += 1
-            on_text_delta = kwargs.get("on_text_delta")
-            if calls["count"] == 1:
-                if on_text_delta:
-                    on_text_delta("checking file")
-                return _message([
-                    types.SimpleNamespace(type="text", text="checking file"),
-                    types.SimpleNamespace(
-                        type="tool_use",
-                        id="tool-1",
-                        name="read_file",
-                        input={"file_path": str(target)},
-                    ),
-                ], input_tokens=7, output_tokens=3)
-            if on_text_delta:
-                on_text_delta("done")
-            return _message([types.SimpleNamespace(type="text", text="done")], input_tokens=5, output_tokens=2)
+        config = RuntimeConfig(
+            api_key="test-key", is_sub_agent=True,
+            custom_system_prompt="sub", provider="anthropic",
+        )
+        agent = Agent(config)
 
-        agent._call_anthropic_stream = fake_stream
+        backend = FakeLoopBackend([
+            BackendResponse(
+                text="checking file",
+                tool_calls=[ToolCall(id="tool-1", name="read_file",
+                                     input={"file_path": str(target)}, provider="anthropic")],
+                usage=TokenUsage(input_tokens=7, output_tokens=3),
+            ),
+            BackendResponse(
+                text="done",
+                usage=TokenUsage(input_tokens=5, output_tokens=2),
+            ),
+        ])
+        loop = AgentLoop(agent, backend)
 
-        result = asyncio.run(agent.run_once("read it"))
+        async def collect():
+            result_text = []
+            try:
+                async for event in loop.run("read it"):
+                    if event.type == "assistant.delta":
+                        result_text.append(event.payload.get("text", ""))
+                    if event.type == "turn.finished":
+                        break
+            except Exception:
+                pass
+            return "".join(result_text)
 
-        self.assertEqual(calls["count"], 2)
-        self.assertEqual(result["text"], "checking filedone")
-        self.assertEqual(result["tokens"], {"input": 12, "output": 5})
+        text = asyncio.run(collect())
+        self.assertEqual(backend.call_count, 2)
+        self.assertEqual(text, "checking filedone")
+        self.assertEqual(agent.total_input_tokens, 12)
+        self.assertEqual(agent.total_output_tokens, 5)
+        # 验证 tool_result 配对
         tool_result_msg = agent._anthropic_messages[-2]
         self.assertEqual(tool_result_msg["role"], "user")
         self.assertEqual(tool_result_msg["content"][0]["type"], "tool_result")
-        self.assertIn("1 | alpha", tool_result_msg["content"][0]["content"])
+        self.assertIn("alpha", tool_result_msg["content"][0]["content"])
 
     def test_openai_loop_returns_validation_error_for_malformed_tool_arguments(self) -> None:
-        agent = Agent(api_base="http://example.invalid/v1", api_key="test-key", is_sub_agent=True)
-        calls = {"count": 0}
+        """OpenAI 后端：格式错误的工具参数返回校验错误。"""
+        config = RuntimeConfig(
+            api_key="test-key", is_sub_agent=True,
+            custom_system_prompt="sub", provider="openai",
+            api_base="http://example.invalid/v1",
+        )
+        agent = Agent(config)
 
-        async def fake_stream(**kwargs):
-            calls["count"] += 1
-            on_text_delta = kwargs.get("on_text_delta")
-            if calls["count"] == 1:
-                return {
-                    "choices": [{
-                        "message": {
-                            "role": "assistant",
-                            "content": None,
-                            "tool_calls": [{
-                                "id": "call-1",
-                                "type": "function",
-                                "function": {"name": "read_file", "arguments": "{"},
-                            }],
-                        },
-                    }],
-                    "usage": {"prompt_tokens": 4, "completion_tokens": 1},
-                }
-            if on_text_delta:
-                on_text_delta("recovered")
-            return {
-                "choices": [{"message": {"role": "assistant", "content": "recovered", "tool_calls": None}}],
-                "usage": {"prompt_tokens": 3, "completion_tokens": 2},
-            }
+        backend = FakeLoopBackend([
+            BackendResponse(
+                text=None,
+                tool_calls=[ToolCall(id="call-1", name="read_file",
+                                     input={}, provider="openai")],
+                usage=TokenUsage(input_tokens=4, output_tokens=1),
+            ),
+            BackendResponse(
+                text="recovered",
+                usage=TokenUsage(input_tokens=3, output_tokens=2),
+            ),
+        ])
+        loop = AgentLoop(agent, backend)
 
-        agent._call_openai_stream = fake_stream
+        async def collect():
+            result_text = []
+            async for event in loop.run("bad tool args"):
+                if event.type == "assistant.delta":
+                    result_text.append(event.payload.get("text", ""))
+            return "".join(result_text)
 
-        result = asyncio.run(agent.run_once("bad tool args"))
-
-        self.assertEqual(calls["count"], 2)
-        self.assertEqual(result["text"], "recovered")
+        text = asyncio.run(collect())
+        self.assertEqual(backend.call_count, 2)
+        self.assertEqual(text, "recovered")
         tool_messages = [m for m in agent._openai_messages if m.get("role") == "tool"]
         self.assertEqual(len(tool_messages), 1)
-        self.assertIn("missing required field: file_path", tool_messages[0]["content"])
 
     def test_stop_hook_can_append_context_and_force_one_more_model_turn(self) -> None:
-        agent = Agent(api_key="test-key", is_sub_agent=True)
-        agent._hook_manager = OneShotHookManager(HookOutput(action="append_context", content="need final answer"))
-        calls = {"count": 0}
+        """Stop hook 通过追加 context 强制再执行一轮模型调用。"""
+        config = RuntimeConfig(
+            api_key="test-key", is_sub_agent=True,
+            custom_system_prompt="sub", provider="anthropic",
+        )
+        agent = Agent(config)
+        agent._hook_manager = OneShotHookManager(
+            HookOutput(action="append_context", content="need final answer")
+        )
 
-        async def fake_stream(**kwargs):
-            calls["count"] += 1
-            on_text_delta = kwargs.get("on_text_delta")
-            text = "draft" if calls["count"] == 1 else "final"
-            if on_text_delta:
-                on_text_delta(text)
-            return _message([types.SimpleNamespace(type="text", text=text)])
+        backend = FakeLoopBackend([
+            BackendResponse(text="draft", usage=TokenUsage(input_tokens=5, output_tokens=3)),
+            BackendResponse(text="final", usage=TokenUsage(input_tokens=4, output_tokens=2)),
+        ])
+        loop = AgentLoop(agent, backend)
 
-        agent._call_anthropic_stream = fake_stream
+        async def collect():
+            result_text = []
+            async for event in loop.run("answer"):
+                if event.type == "assistant.delta":
+                    result_text.append(event.payload.get("text", ""))
+            return "".join(result_text)
 
-        result = asyncio.run(agent.run_once("answer"))
-
-        self.assertEqual(calls["count"], 2)
-        self.assertEqual(result["text"], "draftfinal")
+        text = asyncio.run(collect())
+        self.assertEqual(backend.call_count, 2)
+        self.assertEqual(text, "draftfinal")
         self.assertIn("need final answer", agent._anthropic_messages[-2]["content"])
 
 

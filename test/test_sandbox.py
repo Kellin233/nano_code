@@ -8,14 +8,14 @@ from argparse import Namespace
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.domains.sandbox import (
+from nanocode.capabilities.sandbox import (
     BwrapBackend,
     CommandResult,
     SandboxConfig,
     SandboxManager,
     build_sandbox_config,
 )
-from nanocode.domains.tools.runtime import execute_builtin_tool
+from nanocode.capabilities.tools.runtime import execute_builtin_tool
 
 
 class FakeBackend:
@@ -212,7 +212,7 @@ class SandboxTests(unittest.TestCase):
             sandbox_allow_local_fallback=False,
         )
 
-        with patch("nanocode.domains.sandbox.config.platform.system", return_value="Linux"):
+        with patch("nanocode.capabilities.sandbox.config.platform.system", return_value="Linux"):
             config = build_sandbox_config(args)
 
         self.assertEqual(config.profile, "workspace")
@@ -271,7 +271,7 @@ class SandboxTests(unittest.TestCase):
             SandboxConfig(profile="workspace", backend="bwrap", workspace_host_path=self.workspace)
         )
 
-        with patch("nanocode.domains.sandbox.bwrap_backend.shutil.which", return_value=None):
+        with patch("nanocode.capabilities.sandbox.bwrap_backend.shutil.which", return_value=None):
             result = self.run_async(manager.run_shell("printf unsafe", 30000, self.subdir))
 
         self.assertIn("bubblewrap is not available", result)
@@ -287,7 +287,7 @@ class SandboxTests(unittest.TestCase):
             )
         )
 
-        with patch("nanocode.domains.sandbox.bwrap_backend.shutil.which", return_value=None):
+        with patch("nanocode.capabilities.sandbox.bwrap_backend.shutil.which", return_value=None):
             result = self.run_async(manager.run_shell("printf fallback", 30000, self.subdir))
 
         self.assertEqual(result, "fallback")

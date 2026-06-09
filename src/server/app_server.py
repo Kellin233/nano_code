@@ -6,6 +6,7 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ..models import DEFAULT_MODEL
 from ..protocol.messages import (
     APPROVAL_RESOLVE,
     ProtocolError,
@@ -126,7 +127,7 @@ class NanoCodeServer:
         if not api_key:
             api_key = os.environ.get("OPENAI_API_KEY") if provider == "openai" else os.environ.get("ANTHROPIC_API_KEY")
         return RuntimeConfig(
-            model=str(params.get("model") or os.environ.get("NANO_CODE_MODEL") or "claude-opus-4-6"),
+            model=str(params.get("model") or os.environ.get("NANO_CODE_MODEL") or DEFAULT_MODEL),
             provider=provider,
             api_base=params.get("api_base") if provider == "openai" else None,
             anthropic_base_url=params.get("anthropic_base_url") if provider == "anthropic" else None,

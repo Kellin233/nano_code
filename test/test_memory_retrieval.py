@@ -9,14 +9,14 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.runtime.agent import Agent
-from nanocode.domains.memory.retrieval import (
+from nanocode.runtime.agent import Agent, RuntimeConfig
+from nanocode.capabilities.memory.retrieval import (
     pack_relevant_memories,
     select_relevant_memories,
     start_memory_prefetch,
 )
-from nanocode.domains.memory.store import save_memory
-from nanocode.domains.memory.types import MAX_SESSION_MEMORY_BYTES, RelevantMemory
+from nanocode.capabilities.memory.store import save_memory
+from nanocode.capabilities.memory.types import MAX_SESSION_MEMORY_BYTES, RelevantMemory
 
 
 class IsolatedMemoryTest(unittest.TestCase):
@@ -156,8 +156,8 @@ class MemoryRetrievalTests(IsolatedMemoryTest):
             start_memory_prefetch("two words", side_query, set(), MAX_SESSION_MEMORY_BYTES)
         )
 
-        agent = Agent(api_key="test-key", is_sub_agent=True)
-        self.assertIsNone(agent._start_memory_prefetch("two words"))
+        agent = Agent(RuntimeConfig(api_key="test-key", is_sub_agent=True, custom_system_prompt="sub"))
+        self.assertIsNone(agent.start_memory_prefetch("two words"))
 
 
 if __name__ == "__main__":

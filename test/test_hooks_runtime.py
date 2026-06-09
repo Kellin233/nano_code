@@ -9,9 +9,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.domains.hooks import HookManager
-from nanocode.domains.hooks.types import HookCommand
-from nanocode.domains.tools import ToolCall, ToolContext, ToolRegistry, ToolRuntime
+from nanocode.capabilities.hooks import HookManager
+from nanocode.capabilities.hooks.types import HookCommand
+from nanocode.capabilities.tools import ToolCall, ToolContext, ToolRegistry, ToolRuntime
 
 
 class FakeShell:

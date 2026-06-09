@@ -7,9 +7,9 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.domains.memory.rendering import build_memory_prompt_section, format_memories_for_injection
-from nanocode.domains.memory.store import save_memory
-from nanocode.domains.memory.types import RelevantMemory
+from nanocode.capabilities.memory.retrieval import build_memory_prompt_section, format_memories_for_injection
+from nanocode.capabilities.memory.store import save_memory
+from nanocode.capabilities.memory.types import RelevantMemory
 
 
 class IsolatedMemoryTest(unittest.TestCase):
@@ -65,10 +65,11 @@ class MemoryRenderingTests(IsolatedMemoryTest):
         prompt = build_memory_prompt_section()
 
         self.assertIn("# Memory System", prompt)
-        self.assertIn("keywords: comma, separated, terms", prompt)
         self.assertIn("Write a self-contained memory", prompt)
         self.assertIn("Convert relative dates to absolute dates", prompt)
         self.assertIn("Memory Refactor Preference", prompt)
+        # 简化后的格式不包含详细的关键词字段描述
+        self.assertIn("How to Save Memories", prompt)
 
 
 if __name__ == "__main__":

@@ -7,10 +7,10 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.domains.context.claude_md import load_project_instructions
-from nanocode.domains.context.git_context import DISCLAIMER, collect_git_context
-from nanocode.domains.context.startup import build_prompt_bundle
-from nanocode.domains.context.prompt import build_system_prompt
+from nanocode.context.sources import load_project_instructions
+from nanocode.context.sources import DISCLAIMER, collect_git_context
+from nanocode.context.builder import build_prompt_bundle
+from nanocode.context.builder import build_system_prompt
 
 
 class PromptContextRefactorTests(unittest.TestCase):

@@ -9,13 +9,13 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.domains.memory.store import get_memory_dir, load_memory_index
-from nanocode.domains.tools.builtin import edit_file, write_file
-from nanocode.domains.tools.definitions import builtin_tool_definitions
-from nanocode.domains.tools.permissions import check_permission, reset_permission_cache
-from nanocode.domains.tools.registry import ToolRegistry
-from nanocode.domains.tools.runtime import execute_builtin_tool
-from nanocode.domains.tools.types import ToolMetadata
+from nanocode.capabilities.memory.store import get_memory_dir, load_memory_index
+from nanocode.capabilities.tools.builtin import edit_file, write_file
+from nanocode.capabilities.tools.builtin import builtin_tool_definitions
+from nanocode.capabilities.permissions import check_permission, reset_permission_cache
+from nanocode.capabilities.tools.registry import ToolRegistry
+from nanocode.capabilities.tools.runtime import execute_builtin_tool
+from nanocode.capabilities.tools.types import ToolMetadata
 
 
 class IsolatedToolTest(unittest.TestCase):

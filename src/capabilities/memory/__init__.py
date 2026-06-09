@@ -1,3 +1,6 @@
-from .provider import MemoryCapabilityProvider
+"""Structured long-term memory package.
 
-__all__ = ["MemoryCapabilityProvider"]
+Import concrete functions from the module that owns the behavior, for example
+`memory.store`, `memory.retrieval`, or `memory.rendering`.
+"""
+

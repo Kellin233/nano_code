@@ -21,34 +21,26 @@ sandbox = [
 ]
 
 [project.scripts]
-nanocode = "nanocode.__main__:main"
-nano-code = "nanocode.__main__:main"
+nanocode = "nanocode.cli.main:main"
+nano-code = "nanocode.cli.main:main"
 
 [tool.setuptools]
 packages = [
     "nanocode",
+    "nanocode.backend",
     "nanocode.capabilities",
     "nanocode.capabilities.hooks",
     "nanocode.capabilities.mcp",
     "nanocode.capabilities.memory",
+    "nanocode.capabilities.permissions",
+    "nanocode.capabilities.sandbox",
     "nanocode.capabilities.skills",
     "nanocode.capabilities.subagents",
     "nanocode.capabilities.tools",
-    "nanocode.core",
-    "nanocode.domains",
-    "nanocode.domains.context",
-    "nanocode.domains.hooks",
-    "nanocode.domains.mcp",
-    "nanocode.domains.memory",
-    "nanocode.domains.permissions",
-    "nanocode.domains.sandbox",
-    "nanocode.domains.skills",
-    "nanocode.domains.subagents",
-    "nanocode.domains.tools",
+    "nanocode.cli",
+    "nanocode.context",
     "nanocode.protocol",
-    "nanocode.providers",
     "nanocode.runtime",
-    "nanocode.runtime.agent",
     "nanocode.sdk",
     "nanocode.server",
     "nanocode.server.transports",
@@ -56,3 +48,45 @@ packages = [
     "nanocode.tui",
 ]
 package-dir = {"nanocode" = "src"}
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "C4",   # flake8-comprehensions
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+]
+ignore = [
+    "E501",  # line-too-long handled by formatter
+]
+exclude = ["__pycache__", ".git", ".venv", "venv", "*.egg-info", "remake"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+[tool.ruff.lint.isort]
+known-first-party = ["nanocode"]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = ["test/"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = ["-v", "--tb=short"]

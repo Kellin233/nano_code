@@ -11,12 +11,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.domains.mcp.config import build_server_env, load_mcp_configs
-from nanocode.domains.mcp.connection import McpConnection
-from nanocode.domains.mcp.manager import McpManager
-from nanocode.domains.mcp.output import format_call_result
-from nanocode.domains.mcp.types import McpCallResult, McpServerConfig
-from nanocode.domains.tools import ToolCall, ToolContext, ToolRegistry, ToolRuntime
+from nanocode.capabilities.mcp.config import build_server_env, load_mcp_configs
+from nanocode.capabilities.mcp.connection import McpConnection
+from nanocode.capabilities.mcp.manager import McpManager
+from nanocode.capabilities.mcp.output import format_call_result
+from nanocode.capabilities.mcp.types import McpCallResult, McpServerConfig
+from nanocode.capabilities.tools import ToolCall, ToolContext, ToolRegistry, ToolRuntime
 
 
 class McpConfigTests(unittest.TestCase):

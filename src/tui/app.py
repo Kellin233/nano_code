@@ -9,7 +9,7 @@ import signal
 import sys
 import time
 
-from ..domains.skills import get_skill_by_name
+from ..capabilities.skills import get_skill_by_name
 from .commands import CommandRegistry, default_commands
 from .input import TuiInput
 from .renderer import TuiRenderer, set_renderer
@@ -161,7 +161,7 @@ class TuiApp:
                 command_names.append(alias)
                 descriptions[f"/{alias}"] = f"alias for /{command.name}"
         try:
-            from ..domains.skills import discover_skills
+            from ..capabilities.skills import discover_skills
 
             discovered = [skill for skill in discover_skills() if skill.user_invocable]
             skills = [skill.name for skill in discovered]

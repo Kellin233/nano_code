@@ -6,6 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from ..logging_config import get_logger
+
+logger = get_logger("session.snapshots")
 SESSION_ROOT = Path.home() / ".nanocode" / "sessions"
 
 
@@ -27,5 +30,6 @@ class SnapshotStore:
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
             return int(payload.get("seq") or 0), dict(payload.get("data") or {})
-        except Exception:
+        except Exception as exc:
+            logger.debug("Failed to load snapshot for %s: %s", self.session_id, exc)
             return None

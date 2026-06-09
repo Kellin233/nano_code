@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from nanocode.domains.memory.store import (
+from nanocode.capabilities.memory.store import (
     get_memory,
     get_memory_dir,
     list_memories,
@@ -14,7 +14,7 @@ from nanocode.domains.memory.store import (
     mark_accessed,
     save_memory,
 )
-from nanocode.domains.tools.builtin import write_file
+from nanocode.capabilities.tools.builtin import write_file
 
 
 class IsolatedMemoryTest(unittest.TestCase):

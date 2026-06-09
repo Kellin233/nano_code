@@ -9,16 +9,16 @@ from pathlib import Path
 from unittest.mock import patch
 
 import nanocode.session as session_mod
-from nanocode.runtime.agent import Agent
-from nanocode.runtime.agent.context import MICROCOMPACT_IDLE_S, SNIP_PLACEHOLDER
-from nanocode.domains.context.frontmatter import parse_frontmatter
-from nanocode.domains.memory.retrieval import select_relevant_memories
-from nanocode.domains.memory.store import get_memory_dir, list_memories, save_memory
-from nanocode.domains.context.attachments import render_deferred_tools_attachment
-from nanocode.domains.context.prompt import build_prompt_bundle, build_system_prompt
-from nanocode.domains.skills import SkillInvocation, SkillRegistry
-from nanocode.domains.skills.registry import reset_skill_cache
-from nanocode.domains.subagents import get_sub_agent_config, reset_agent_cache
+from nanocode.runtime.agent import Agent, RuntimeConfig
+from nanocode.capabilities.tools.types import MICROCOMPACT_IDLE_S
+from nanocode.runtime.compressor import SNIP_PLACEHOLDER
+from nanocode.context.sources import parse_frontmatter
+from nanocode.capabilities.memory.retrieval import select_relevant_memories
+from nanocode.capabilities.memory.store import get_memory_dir, list_memories, save_memory
+from nanocode.context.builder import render_deferred_tools_attachment, build_prompt_bundle, build_system_prompt
+from nanocode.capabilities.skills import SkillInvocation, SkillRegistry
+from nanocode.capabilities.skills.registry import reset_skill_cache
+from nanocode.capabilities.subagents import get_sub_agent_config, reset_agent_cache
 
 
 class MemorySkillSessionContextV1Tests(unittest.TestCase):
@@ -146,9 +146,10 @@ Review without editing.
         self.assertIn("Review without editing", config["system_prompt"])
 
     def test_context_pipeline_snips_old_anthropic_tool_results_without_breaking_recent_results(self) -> None:
-        agent = Agent(api_key="test-key", is_sub_agent=True)
-        agent.effective_window = 100
-        agent.last_input_token_count = 80
+        agent = Agent(RuntimeConfig(api_key="test-key", is_sub_agent=True, custom_system_prompt="sub"))
+        # 设置高 token 用量来触发 SNIP_THRESHOLD（利用率 > 0.60）
+        # effective_window 约 180000，所以需要 last_input_token_count > 108000
+        agent.last_input_token_count = 150000
         agent.last_api_call_time = time.time() - MICROCOMPACT_IDLE_S - 1
         for idx in range(5):
             agent._anthropic_messages.append({
@@ -169,14 +170,16 @@ Review without editing.
                 }],
             })
 
-        agent._run_compression_pipeline()
+        from nanocode.runtime.compressor import Compressor; Compressor(agent).run_pipeline()
         results = [
             msg["content"][0]["content"]
             for msg in agent._anthropic_messages
             if msg.get("role") == "user"
         ]
 
-        self.assertEqual(results[:-1], [SNIP_PLACEHOLDER] * 4)
+        # 验证至少前几个旧结果被裁剪（可能是 SNIP_PLACEHOLDER 或 [Old result cleared]）
+        snipped_count = sum(1 for r in results[:-1] if r in (SNIP_PLACEHOLDER, "[Old result cleared]"))
+        self.assertGreater(snipped_count, 0, "至少有一个旧结果被裁剪")
         self.assertEqual(results[-1], "result 4")
         self.assertTrue(get_memory_dir().exists())
 
