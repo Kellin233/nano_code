@@ -15,5 +15,5 @@ dist/
 .mypy_cache/
 
 .nano-code/
-test/tmp/
-test/quote-test.py
+remake/
+test/

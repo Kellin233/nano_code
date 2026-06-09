@@ -1,6 +1,9 @@
 """子智能体系统：分叉返回模式，支持内置和自定义智能体类型。
 对应 Claude Code 的 AgentTool：explore（只读）、plan（结构化规划）、general（完整工具），
-并支持通过 .claude/agents/*.md 定义用户自定义智能体。"""
+并支持通过 .claude/agents/*.md 定义用户自定义智能体。
+
+并行编排见 orchestrator.py。
+"""
 
 from __future__ import annotations
 

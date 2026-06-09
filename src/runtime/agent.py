@@ -540,6 +540,29 @@ class Agent:
 
     # ─── 内部 ────────────────────────────────────
 
+    async def _execute_agent_tool(self, inp: dict) -> str:
+        """agent 工具入口——被 ToolRegistry._call_builtin 调用。
+
+        支持单任务和多任务：
+          - 单任务：type + prompt → 派发一个子 Agent
+          - 多任务：tasks 列表 → 并行派发多个子 Agent
+        """
+        from ..capabilities.subagents.orchestrator import SubAgentOrchestrator
+        from ..tui.renderer import get_renderer
+
+        orchestrator = SubAgentOrchestrator(self)
+
+        if "tasks" in inp and isinstance(inp["tasks"], list):
+            tasks = inp["tasks"]
+        else:
+            tasks = [{"type": inp.get("type", "general"), "prompt": inp.get("prompt", "")}]
+
+        agent_type = inp.get("type", "general")
+        get_renderer().sub_agent_start(agent_type, inp.get("description", "sub-agent task"))
+
+        results = await orchestrator.dispatch(tasks)
+        return _format_agent_results(results)
+
     def _build_system_prompt(self) -> str:
         from ..context.builder import build_system_prompt
         return build_system_prompt()
@@ -551,3 +574,18 @@ class Agent:
             "system_prompt": bundle.system_prompt,
             "startup_context": bundle.startup_context,
         }
+
+
+def _format_agent_results(results: list[dict]) -> str:
+    """格式化子 Agent 结果为可读文本。"""
+    if not results:
+        return "(Sub-agent produced no output)"
+
+    parts = []
+    for i, r in enumerate(results):
+        if len(results) > 1:
+            parts.append(f"--- Sub-agent {i + 1} ({r.get('type', 'general')}) ---")
+        if "error" in r:
+            parts.append(f"Error: {r['error']}")
+        parts.append(r.get("text", "(no output)"))
+    return "\n\n".join(parts)

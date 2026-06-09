@@ -137,13 +137,25 @@ BUILTIN_TOOL_DEFINITIONS: list[ToolDef] = [
     },
     {
         "name": "agent",
-        "description": "Launch a sub-agent to handle a task autonomously. Sub-agents have isolated context and return their result. Types: 'explore' (read-only), 'plan' (read-only, structured planning), 'general' (full tools).",
+        "description": "Launch one or more sub-agents to handle tasks autonomously. Sub-agents have isolated context and return their result. Types: 'explore' (read-only search), 'plan' (read-only planning), 'general' (full tools except agent). Pass 'tasks' for parallel execution of multiple sub-agents.",
         "input_schema": {
             "type": "object",
             "properties": {
-                "description": {"type": "string", "description": "Short (3-5 word) description of the sub-agent's task"},
-                "prompt": {"type": "string", "description": "Detailed task instructions for the sub-agent"},
-                "type": {"type": "string", "enum": ["explore", "plan", "general"], "description": "Agent type. Default: general"},
+                "description": {"type": "string", "description": "Short (3-5 word) description of the task"},
+                "prompt": {"type": "string", "description": "Detailed task instructions for the sub-agent. Ignored when tasks list is provided."},
+                "type": {"type": "string", "enum": ["explore", "plan", "general"], "description": "Agent type. Default: general. Ignored when tasks list is provided."},
+                "tasks": {
+                    "type": "array",
+                    "description": "Optional list of tasks for parallel execution. When provided, each task runs as an independent sub-agent concurrently.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {"type": "string", "enum": ["explore", "plan", "general"], "description": "Agent type for this task"},
+                            "prompt": {"type": "string", "description": "Task instructions"},
+                        },
+                        "required": ["type", "prompt"],
+                    },
+                },
             },
             "required": ["description", "prompt"],
         },
