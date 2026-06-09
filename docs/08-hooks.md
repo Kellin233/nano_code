@@ -1,85 +1,54 @@
 # Hooks：生命周期钩子
 
-## 概述
+## 为什么需要 Hooks
 
-`capabilities/hooks/` 在工具执行的四个关键节点插入用户自定义脚本。Hook 不是权限系统——它是在权限检查之外，给用户一个额外的拦截和修改通道。
+权限系统说"yes or no"，但用户可能想说"yes，但要改一下参数"。或者"这个工具跑完之后，把结果记个日志"。Hooks 在工具执行的四个关键节点插入用户自定义脚本——不是替代权限系统，而是给用户一个额外的拦截和修改通道。
 
-## 四个事件
+## 核心概念
 
-| 事件 | 触发时机 | 能做什么 |
-|------|---------|---------|
-| `UserPromptSubmit` | 用户消息即将发送给模型 | deny（阻止）、modify（修改 prompt）、append_context（追加） |
-| `PreToolUse` | 工具校验后、权限检查前 | deny（阻止）、modify（修改输入） |
-| `PostToolUse` | 工具执行后 | append_context（追加系统消息） |
-| `Stop` | 模型结束响应时 | deny（强制再跑一轮）、append_context（追加后继续） |
+### 四个事件
 
-## 架构
+| 事件 | 时机 | 能做什么 |
+|------|------|---------|
+| UserPromptSubmit | 用户消息发出前 | deny（阻止）、modify（改 prompt）、append_context（追加） |
+| PreToolUse | 工具校验后、权限前 | deny（阻止）、modify（改参数） |
+| PostToolUse | 工具执行后 | append_context（追加系统消息） |
+| Stop | 模型结束响应时 | deny（强制再跑一轮） |
 
-```
-HookManager.capture()
-    │
-    ├── 加载 ~/.claude/settings.json 中的 hooks 配置
-    ├── 项目级 .claude/settings.json 默认不加载
-    │   （需 NANO_CODE_TRUST_PROJECT_HOOKS=1）
-    │
-    └── run(event, hook_input) → [HookOutput, ...]
-        对匹配 event+matcher 的 hook，调用命令
-```
+### modify 后的重新校验
 
-## 配置格式
+PreToolUse hook 修改工具输入后，`ToolRuntime` 对修改后的输入重新调用 `tool.validate()`。这是关键安全约束——hook 可能写错、可能有 bug、可能恶意的。如果修改后的输入校验失败（如删除了必填字段），执行被阻断。
 
-```json
-{
-  "hooks": {
-    "PreToolUse": [{
-      "matcher": "run_shell",
-      "command": "python .claude/hooks/check_shell.py",
-      "timeout_ms": 3000
-    }],
-    "PostToolUse": [{
-      "matcher": "*",
-      "command": "python .claude/hooks/audit.py"
-    }]
-  }
-}
-```
+修改后的输入仍然进入权限策略——hook 不能通过 modify 绕过 deny 规则。
 
-## Hook 输入输出
+### 项目 hooks 默认不信任
 
-**输入**（通过 JSON 传给命令）：`event`、`session_id`、`cwd`、`prompt`、`tool_name`、`tool_input`、`tool_result`、`last_assistant_text`。
+`~/.claude/settings.json` 的 hooks 始终加载。项目级 `.claude/settings.json` 的 hooks 需要 `NANO_CODE_TRUST_PROJECT_HOOKS=1` 才加载——因为 clone 一个项目时，它的 hooks 配置你不一定信任。
 
-**输出**（命令 stdout 的 JSON）：
-- `{"action": "allow"}` — 放行
-- `{"action": "deny", "reason": "..."}` — 拒绝
-- `{"action": "modify", "updated_input": {...}}` — 修改工具输入
-- `{"action": "append_context", "content": "..."}` — 追加上下文
+## 设计决策
 
-## 安全约束
+### 为什么 hooks 不替代权限系统
 
-**PreToolUse modify 后重新校验**：hook 修改工具输入后，`ToolRuntime` 对修改后的输入重新调用 `tool.validate()`。如果校验失败（如 hook 删除了必填字段），执行被阻断。
+权限系统有不可绕过的 deny 层（路径边界 + 用户规则），hooks 的输出是可绕过的（用户可以选择不配 hook）。hooks 是"用户自定义的额外逻辑"，权限是"系统级的安全策略"。两者定位不同。
 
-**modify + 权限检查**：修改后的输入仍然进入权限策略——hook 不能通过 modify 绕过权限。
+### 为什么 modify 后重新校验
 
-**项目 hooks 默认不信任**：只有 `NANO_CODE_TRUST_PROJECT_HOOKS=1` 时才加载项目级 hooks。`~/.claude/settings.json` 始终加载。
+hook 是用户脚本——可能写错。如果返回了不合法的工具参数，不重新校验就把错误输入传给工具或模型。在 PreToolUse 阶段拦截是最佳时机——比工具执行时报错更有信息量。
 
-## 在 AgentLoop 中的位置
+### 为什么 Stop hook 能强制再跑一轮
 
-```
-AgentLoop.run():
-    ⑦ _apply_user_prompt_hooks(msg)     ← UserPromptSubmit
-    [主循环]
-        backend.call()
-        if 无 tool_calls:
-            ⑨ _run_stop_hook(text)        ← Stop
+有时模型的回复"方向对了但不够"——`Stop` hook 通过 `deny` + `append_context` 追加一条系统消息后，主循环继续再跑一轮。这让用户可以在模型停止后"推一把"。
 
-ToolRuntime.execute_one():
-    ③ hooks.run("PreToolUse", ...)       ← PreToolUse
-    ...
-    ⑧ hooks.run("PostToolUse", ...)      ← PostToolUse
-```
+## 代码走读
+
+**`types.py`**：`HookInput`（传给命令的 JSON）、`HookOutput`（命令 stdout 解析）、`HookCommand`（配置项）。
+
+**`config.py`**：`HookManager.capture()` 加载 hooks 配置。`run(event, hook_input)` 匹配 matcher 并执行匹配的命令。
+
+**`runner.py`**：`run_command_hook()` 用 `subprocess.run` 执行 hook 命令，超时控制（默认 3000ms）。
 
 ## 面试考点
 
 **Q: hook modify 后为什么需要重新校验？**
 
-hook 是用户自定义脚本——可能写错、可能有 bug。如果 hook 返回了不合法的工具参数（如删除了必填字段），不重新校验就会把错误输入传给工具或模型。在 PreToolUse 阶段拦截是最佳时机。
+hook 是用户脚本——可能写错。如果返回了不合法参数（删除必填字段），不重新校验就传给工具会报错或行为异常。PreToolUse 阶段拦截成本最低。

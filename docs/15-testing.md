@@ -1,98 +1,69 @@
-# 功能测试指南
+# 测试指南
 
-## 测试目录结构
+## 为什么需要测试
 
-测试目录与源码模块一一对应：
+重构 55 个源文件、改 7 个能力模块、重新划分依赖方向——没有测试就是在瞎改。NanoCode 的测试策略是：单元测试不依赖任何外部服务（API、MCP server、microsandbox），集成测试用 FakeBackend 和 FakeSandbox 模拟。
+
+## 核心概念
+
+### 测试目录与源码一一对应
 
 ```
 test/
-├── runtime/           # Agent、Loop、Compressor、SubAgent、架构
+├── runtime/           # Agent、Loop、Compressor、SubAgent
 ├── backend/           # Backend 接口 + 工厂
-├── cli/               # CLI 参数解析 + 集成
-├── context/           # System prompt、附件渲染、数据源
-├── capabilities/      # tools、skills、hooks、sandbox、memory、mcp、permissions
+├── cli/               # CLI 参数解析
+├── context/           # 提示词构建 + 数据源
+├── capabilities/      # tools、skills、hooks、sandbox、memory、mcp
 └── tui/               # TUI 交互
 ```
 
-## 测试运行
+每个测试文件测试一个模块。改了什么代码，就在对应目录加测试。
 
-```bash
-# 全部测试
-python3 -m unittest discover -s test -v
+### 测试分层
 
-# 特定模块
-python3 -m unittest discover -s test/runtime -v
-python3 -m unittest discover -s test/capabilities -v
+**单元测试**：不依赖真实 API/文件系统/外部服务。测试 Agent 状态操作、ToolRegistry 注册查找、Compressor 压缩逻辑。用 Mock 和 Fake 对象替代真实依赖。
 
-# 编译检查（先于测试运行）
-python3 -m compileall src test
-```
-
-## 测试分层
-
-| 层 | 特征 | 示例 |
-|:--:|------|------|
-| **单元测试** | 不依赖真实 API/文件系统/外部服务 | `test_agent.py`——测试 Agent 状态操作 |
-| **集成测试** | 需要临时文件或 mock Backend | `test_loop.py`——用 FakeBackend 驱动 AgentLoop |
-
-**单元测试不依赖**：真实 Anthropic/OpenAI API、MCP subprocess、microsandbox 容器。这些依赖在 CI 环境中不可用。
+**集成测试**：需要临时文件或 FakeBackend。测试 AgentLoop 完整流程、ToolRuntime 执行管线、Hooks 交互。FakeBackend 返回预设的 `BackendResponse`。
 
 ## Mock 策略
 
-### Mock Backend
+### FakeBackend
 
 ```python
 class FakeBackend(Backend):
     def __init__(self, text="", tool_calls=None, usage=None):
         self._text = text
         self._tool_calls = tool_calls or []
-        self._usage = usage or TokenUsage(3, 2)
-    
     async def call(self, **kwargs):
-        return BackendResponse(text=self._text, 
-                               tool_calls=self._tool_calls, 
-                               usage=self._usage)
+        return BackendResponse(text=self._text, tool_calls=self._tool_calls, usage=self._usage)
 ```
 
-### Mock Sandbox
+### FakeSandbox
 
 ```python
 class FakeShell:
-    def __init__(self, output="ok"):
-        self.calls = []
     async def run_shell(self, command, timeout_ms, cwd):
         self.calls.append((command, timeout_ms, cwd))
-        return self.output
+        return "ok"
 ```
 
-### Mock Agent.run_once
+### 测试组织原则
 
-```python
-with patch.object(Agent, "run_once", return_value={"text": "done", "tokens": ...}):
-    results = asyncio.run(orchestrator.dispatch(tasks))
-```
+- **每个模块一个测试文件**：`test/runtime/test_agent.py`、`test/capabilities/test_tools.py`
+- **测试命名带描述**：`test_budget_exceeded_cost_limit` 而非 `test_budget_1`
+- **setUp/tearDown 隔离临时文件**：用 `tempfile.TemporaryDirectory`
 
-## 常见测试失败原因
+## 常见失败原因
 
-| 失败类型 | 常见原因 |
-|---------|---------|
-| `ModuleNotFoundError` | import 路径过时（`.base`/`.constants`/`.definitions` 已合并为 `.types`/`.builtin`） |
-| `AttributeError: 'Agent' has no attribute '_call_anthropic_stream'` | 测试使用了 Mixin 方法——应改用 `FakeBackend` |
-| `TypeError: Agent() got unexpected keyword argument 'api_key'` | 使用了旧构造器——应改用 `Agent(RuntimeConfig(...))` |
+| 失败 | 原因 |
+|------|------|
+| `ModuleNotFoundError: .tools.base` | 旧 import 路径——base.py 已合并到 types.py |
+| `TypeError: Agent() got unexpected keyword 'api_key'` | 旧构造函数——应改为 `Agent(RuntimeConfig(api_key=...))` |
 | `grep_search` 返回 "No matches found" | 系统 grep 环境问题——非代码 bug |
-| `ToolResult: requires a sandbox manager` | `run_shell` 测试需要 mock sandbox |
 
-## 新增测试 Checklist
+## 面试考点
 
-修改了什么代码，就在对应目录加测试：
+**Q: 为什么不 mock 所有东西？**
 
-| 改了什么 | 加测试到 |
-|---------|---------|
-| `runtime/agent.py` | `test/runtime/test_agent.py` |
-| `runtime/loop.py` | `test/runtime/test_loop.py` |
-| `runtime/compressor.py` | `test/runtime/test_compressor.py` |
-| `backend/*.py` | `test/backend/test_backend.py` |
-| `cli/args.py` | `test/cli/test_args.py` |
-| `context/builder.py` | `test/context/test_builder.py` |
-| `capabilities/tools/*.py` | `test/capabilities/test_tools*.py` |
-| `capabilities/subagents/*.py` | `test/runtime/test_subagent.py` |
+只 mock 外部依赖（API、MCP、sandbox）。内部组件（Agent、ToolRegistry、Compressor）用真实实例——测试的是组件之间的真实交互。过度 mock 会让测试只能验证"mock 对象被调用了"，而不是"系统行为正确"。

@@ -1,208 +1,77 @@
 # Runtime 内核
 
-## 概述
+## 为什么需要 Runtime
 
-`runtime/` 是 nanocode 的核心——一次对话的全部状态和行为都在这里。三个类通过构造函数注入协作：Agent 是被动的数据仓库，AgentLoop 是导演（调度一切），Compressor 是清洁工（压缩上下文）。
+一个 Agent 的代码可以写成一个大类——消息历史、API 调用、工具执行、上下文压缩全塞在一起。很多早期 AI Agent 项目就是这样做的。
 
-## 架构
+问题是改不动。想换模型厂商？要改 Agent 类。想改压缩策略？要改 Agent 类。想加一种新工具？还是要改 Agent 类。Agent 变成了 God-class——什么都能做，但改什么都危险。
 
-```
-AgentLoop(agent, backend)
-     │
-     ├── 读：agent.messages / agent.system_prompt / agent.tool_definitions()
-     ├── 调：backend.call()
-     ├── 执：ToolRuntime（委托工具执行）
-     ├── 压：Compressor(agent).run_pipeline()
-     └── 写：agent.add_user_message() / agent.append_user_context()
+Runtime 的设计目标就是**拆开 God-class**。把一次对话涉及的所有职责拆成三个独立组件：Agent（状态容器）、AgentLoop（调度器）、Compressor（压缩器）。每个组件只做一件事，通过显式接口协作。
 
-Compressor(agent)
-     │
-     ├── 直接读写 agent._anthropic_messages / agent._openai_messages
-     └── compact_conversation() 自己调 API 生成摘要
-```
+## 核心概念
 
-Agent 是它们唯一的共享状态。AgentLoop 和 Compressor 之间不直接通信。
-
----
-
-## Agent（`agent.py`，590 行）
-
-### 定位
-
-纯状态容器。没有循环，没有 API 调用，没有压缩逻辑。所有行为外移到了 AgentLoop、Backend、Compressor。
-
-### 初始化持有什么
+### 三角关系
 
 ```
-Agent.__init__(config)
-│
-├── 工具层
-│   └── ToolRegistry(builtin_tool_definitions())   # 内置 12 个工具
-│
-├── 能力模块（实例化并持有引用）
-│   ├── SandboxManager(config.sandbox_config)       # shell 沙箱
-│   ├── McpManager(on_tools_changed=...)            # MCP 连接管理
-│   ├── HookManager.capture()                       # Hook 配置
-│   ├── SkillInvocation()                           # Skill 调用器
-│   └── ActiveSkillManager()                        # Active skill 跟踪
-│
-├── 会话状态
-│   ├── _anthropic_messages = []    # Anthropic 消息历史
-│   ├── _openai_messages = []       # OpenAI 消息历史
-│   ├── total_input_tokens = 0      # 累计输入 token
-│   ├── total_output_tokens = 0     # 累计输出 token
-│   ├── current_turns = 0           # 当前轮次
-│   └── last_input_token_count = 0  # 上次 API 调用的输入量
-│
-├── 权限 & 文件状态
-│   ├── _confirmed_paths = set()    # 本会话已确认的操作
-│   ├── _read_file_state = {}       # 文件路径 → mtime（先读后改）
-│   └── _confirm_fn = None          # 确认回调（TUI/CLI 注册）
-│
-├── 上下文状态
-│   ├── _pending_context_attachments = []  # 待注入附件队列
-│   ├── _startup_context_injected = False  # 启动上下文是否已发
-│   └── _initial_context_attachments_prepared = False
-│
-└── 系统提示词
-    ├── 主 Agent: build_prompt_bundle() → system_prompt + startup_context
-    ├── 子 Agent: custom_system_prompt（fork 时传入）
-    └── 子 Agent: build_system_prompt()（无启动上下文）
+Agent（数据仓库）←── AgentLoop（导演）──→ Backend（翻译官）
+    ↑                    │
+    └── Compressor（清洁工）←┘
 ```
 
-### 双后端消息历史
+**Agent**：被动数据仓库。存消息历史、token 计数、能力模块引用。不主动做任何事。
 
-`_anthropic_messages` 和 `_openai_messages` 是两个独立的列表。**不统一**——因为结构差异太大：
+**AgentLoop**：导演。读取 Agent 的状态，调用 Backend，委托 ToolRuntime 执行工具，委托 Compressor 压缩上下文。产出 RuntimeEvent 流。
 
-```python
-# Anthropic: tool_use/tool_result 嵌套在 content list 中
-{"role": "assistant", "content": [
-    {"type": "text", "text": "..."},
-    {"type": "tool_use", "id": "t1", "name": "read_file", "input": {...}}
-]}
-{"role": "user", "content": [
-    {"type": "tool_result", "tool_use_id": "t1", "content": "..."}
-]}
+**Compressor**：清洁工。对话太长时，压缩消息历史。直接读写 Agent 的内部消息列表。
 
-# OpenAI: tool 是独立 message
-{"role": "assistant", "content": "...", "tool_calls": [...]}
-{"role": "tool", "tool_call_id": "t1", "content": "..."}
-```
+Agent 是它们唯一的共享状态——AgentLoop 和 Compressor 之间不直接通信。
 
-强行统一需要中间抽象层——增加复杂度但不增加价值。Agent 的 4 个公开方法（`add_user_message`、`add_assistant_message`、`add_tool_results`、`append_user_context`）在内部根据 `use_openai` 路由到正确的列表。
+### Agent 持有的能力模块
 
-### 对 AgentLoop 暴露的接口
+Agent 在 `__init__` 中实例化了 5 个能力模块：`ToolRegistry`（工具注册表）、`SandboxManager`（沙箱）、`McpManager`（MCP 连接）、`SkillInvocation`（Skill 调用）、`HookManager`（Hook 配置）。AgentLoop 通过 Agent 拿到这些引用，打包成 `ToolContext` 传给 `ToolRuntime`。
 
-**读**：`agent.messages`（property，返回当前后端消息列表）、`agent.system_prompt`、`agent.tool_definitions()`、`agent.effective_window`（context window - 20000 margin）、`agent.budget_exceeded()` 返回 `{"exceeded": bool, "reason": str}`。
+这体现了**组合优于继承**：Agent 不是"继承所有能力"，而是"持有能力模块的引用"。换一个 sandbox 实现？换 `SandboxManager` 的构造函数参数就行，Agent 类不用动。
 
-**写**：`agent.add_user_message(text)` 追加用户消息。`agent.record_usage(in, out)` 更新 token 计数。`agent.append_user_context(text)` 把系统上下文追加到最新用户消息后——保证消息角色交替合法。
+### 一条消息的旅程
 
-**初始化**：`agent.ensure_mcp_initialized()`（仅首次，连接 MCP）、`agent.inject_startup_context()`（注入日期/CLAUDE.md/Git）、`agent.prepare_initial_attachments()`（注入 skill/deferred tool 列表）、`agent.shutdown()`（断开 MCP + 停止 sandbox）。
+用户输入 "修 bug" → AgentLoop.run() 注入上下文 → Backend.call() 调模型 → 模型返回 tool_calls → ToolRuntime 执行（验证→权限→确认→执行）→ 追加结果到 Agent 的消息历史 → Compressor 压缩检查 → 再调模型 → 直到模型不再调用工具 → LoopFinished("stop")。
 
-### 子 Agent fork
+## 设计决策
 
-`run_once(prompt)` 创建自己的 AgentLoop，跑完返回 `{"text": str, "tokens": {...}}`。子 Agent 不注入启动上下文、不初始化 MCP、不触发记忆系统——`is_sub_agent` 标志控制所有这些差异。
+### 决策 1：Agent 是纯状态容器，行为全部外移
 
----
+**为什么**：原来的 Agent 通过 3 个 Mixin 拼装行为。Mixin 通过 `self._anthropic_messages` 隐式访问状态——改了字段名 Mixin 就崩了。阅读完整行为需要跨 core.py、context.py、tools_runtime.py、backends.py 四个文件。
 
-## AgentLoop（`loop.py`，326 行）
+**代价**：AgentLoop 需要显式传入 agent 和 backend。但换来的好处是每个文件的变更原因独立——改压缩策略只改 compressor.py，改循环逻辑只改 loop.py。
 
-### 定位
+### 决策 2：AgentLoop 后端无关
 
-后端无关的主对话循环。通过 `Backend` 接口调用模型，不区分 Anthropic/OpenAI。产出 `AsyncIterator[RuntimeEvent]` 流。
+AgentLoop 只依赖 `Backend` 抽象接口（`backend/base.py`），不依赖具体的 `AnthropicBackend` 或 `OpenAIBackend`。这是依赖倒置——上层依赖抽象，下层实现抽象。
 
-### `run(user_message)` 完整流程
+**为什么之前有两套循环**：旧的 `agent/loop.py` 有 `_run_anthropic`（~100 行）和 `_run_openai`（~100 行），80% 代码相同。现在后端差异封装在 Backend 策略类中，循环只有一套。
 
-```
-1. agent.inject_startup_context()         # 仅首次：日期/CLAUDE.md/Git
-2. agent.prepare_initial_attachments()    # 仅首次：skill/deferred tool 列表
-3. agent.flush_pending_attachments()      # 刷新 MCP 变更等挂起附件
-4. agent.add_user_message(user_message)   # 追加用户消息
-5. await agent.ensure_mcp_initialized()   # 仅首次：连接 MCP
-6. await _check_and_compact()             # 利用率 > 85% 预先压缩
-7. await _apply_user_prompt_hooks(msg)    # UserPromptSubmit hook
-8. memory_prefetch = agent.start_memory_prefetch(msg)
+### 决策 3：Compressor 直接访问 Agent 的私有字段
 
-9. while True:                            # 主循环
-     if agent.aborted: yield LoopFinished("aborted"); return
-     _run_compression_pipeline()          # Budget → Snip → Microcompact
-     agent.consume_memory_prefetch(...)    # 消费记忆预取
-     response = await backend.call(...)    # 调模型
-     _append_assistant_message(response)
-     if 无 tool_calls:
-         检查 Stop hook → 结束或继续
-     if budget_exceeded: yield BudgetExceeded(...); return
-     执行工具 → 追加结果 → 继续循环
-```
+Compressor 不通过公开接口操作消息历史——它直接读写 `agent._anthropic_messages` 和 `agent._openai_messages`。这打破了封装。
 
-### 文本流实时输出
+**为什么可以接受**：Compressor 的职责就是修改消息历史——它是 Agent 的"外科医生"。给它公开接口反而会让 Agent 的 API 面膨胀（需要暴露 `_budget_message()`、`_snip_message()`、`_compact_message()` 等方法）。Compressor 和 Agent 放在同一个包（`runtime/`）下，明确了它们的亲密关系。
 
-两个并发任务实现边收边渲染：
+## 代码走读
 
-```python
-call_task = create_task(backend.call(on_text_delta=...))  # 调模型
-while not call_task.done():
-    event = await text_events.get()   # 每 50ms 取一次
-    yield event                        # 发给 TUI/CLI
-```
+**`agent.py`（~580 行）**：项目最大的文件。`__init__` 实例化所有能力模块并初始化状态字段。消息操作方法（`add_user_message`、`add_assistant_message`、`add_tool_results`、`append_user_context`）在内部根据 `use_openai` 路由到 Anthropic 或 OpenAI 的消息列表。`run_once()` 是子 Agent 的入口——创建自己的 AgentLoop 跑完返回结果。
 
-`on_text_delta` 把每个 text chunk 放入 `asyncio.Queue`，主循环每 50ms 取一次。用户看到逐字流式输出。
+**`loop.py`（~326 行）**：`run(user_message)` 方法的 9 个步骤注释清晰。文本流实时输出用 `asyncio.Queue` + `create_task` 实现——边收文本边 yield 事件，每 50ms 检查一次。
 
-### 工具执行：打包 ToolContext
+**`compressor.py`（~264 行）**：`run_pipeline()` 按顺序执行三层压缩。`compact_conversation()` 调模型生成摘要——compact 失败时降级而不中断会话。
 
-AgentLoop 不直接执行工具——把 Agent 的能力模块打包成 ToolContext：
-
-```python
-ctx = ToolContext(
-    read_file_state=agent._read_file_state,   # 先读后改
-    sandbox_manager=agent._sandbox_manager,    # run_shell
-    mcp_manager=agent._mcp_manager,            # MCP 工具
-    agent=agent,                                # agent/skill 工具
-)
-runtime = ToolRuntime(agent._tool_registry, permission_mode=..., confirm_fn=...)
-await runtime.execute_many(calls, ctx)
-```
-
-ToolRuntime 通过 ToolContext 拿到需要的一切，不直接引用 Agent——工具执行层和 Agent 状态层解耦。
-
----
-
-## Compressor（`compressor.py`，264 行）
-
-### 定位
-
-对话太长时压缩消息历史。不压缩语义，只压缩大小。
-
-### 三层 + Compact
-
-```
-利用率 < 50%：什么都不做
-利用率 > 50%：Budget    — 裁剪超长工具结果到 15K-30K 字符（头尾保留、中间截断）
-利用率 > 60%：Snip      — 旧 read_file 结果替换为 [Content snipped]
-利用率 > 85%：Compact   — 调模型生成摘要，重置消息历史
-空闲 > 5分钟：Microcompact — 清除旧结果为 [Old result cleared]
-```
-
-**Snip 的 Anthropic 优化**：先扫 assistant 消息建 `tool_use_id → block` 索引，再扫 user 消息中的 tool_result。同一文件的多次 `read_file` 只保留最后一次——前面的替换为占位符。
-
-**Compact**：调用模型生成摘要（`max_tokens=2048`），重置历史为 `摘要 + 最后一条用户消息 + "Understood..."`，然后重挂 active skill 上下文。compact 失败时降级——保留未压缩的历史继续对话。
-
----
-
-## events.py（88 行）
-
-统一事件模型。工厂函数替代子类——类型判断用 `event.type` 字符串：
-
-```python
-ToolCallStarted(call)     # → RuntimeEvent(type="tool.started")
-LoopFinished("stop")      # → RuntimeEvent(type="turn.finished")
-BudgetExceeded(reason)    # → RuntimeEvent(type="budget.exceeded")
-```
-
-三种消费端各自消费事件流：一次性模式（`_render_event`）、TUI（`TuiApp._chat`）、Server（JSONL 转发）。
+**`events.py`（~88 行）**：`RuntimeEvent` 数据类 + 工厂函数。事件流被 TUI/CLI/Server 三种消费端各自消费。
 
 ## 面试考点
 
-**Q: 为什么 Agent 从 Mixin 改为纯状态容器？**
+**Q: 为什么有 `_anthropic_messages` 和 `_openai_messages` 两套？不统一吗？**
 
-原 Agent 通过 3 个 Mixin 拼装行为。Mixin 通过 `self._anthropic_messages` 隐式访问状态——改了字段名 Mixin 就崩了，跨 4 个文件阅读才能理解完整行为。现在每个组件职责单一、依赖显式。
+两种格式差异太大——Anthropic 的 tool_use/tool_result 嵌套在 content list 中，OpenAI 的是独立 message。强行统一需要中间抽象层——增加复杂度不减少代码。这是刻意的"不抽象"。
+
+**Q: Compressor 为什么直接访问 Agent 的私有字段？**
+
+Compressor 是 Agent 的"外科医生"——它的职责就是修改消息历史。通过公开接口反而会让 Agent 的 API 膨胀——需要暴露各种裁剪方法。放在同一个包（`runtime/`）下明确了这个亲密关系。

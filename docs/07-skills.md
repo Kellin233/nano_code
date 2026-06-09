@@ -1,152 +1,66 @@
-# Skills 系统设计
+# 技能系统
 
-## 目标
+## 为什么需要 Skills
 
-Skills 是 Claude Code 风格的"可复用提示词模板"系统。用户或模型调用一个 skill 名字，系统返回渲染后的提示词。设计核心是三层阶段式披露：只在使用时才加载完整内容。
+有些任务需要重复的提示词模板——"写 git commit"、"做代码审查"。如果让用户每次都手打一段长 prompt，效率低且不一致。Skills 把常用的提示词模板化，用户或模型调用一个名字就能触发。
 
-## 代码流程
+Skills 不是"插件"——它们不引入新代码，只是提示词模板。安全边界仍然由工具白名单和权限系统控制。
 
-```
-Skill 调用路径：
-    /skill-name (用户 REPL) → TuiApp._try_skill()
-    或 skill tool (模型调用) → ToolRegistry._call_builtin("skill", inp)
-         │
-         ▼
-    SkillInvocation.invoke(skill_name, args, invoked_by)
-         │
-         ├── SkillRegistry.get(name)  → 查找 SkillDefinition
-         │     ├── 优先项目级 .claude/skills/<name>/SKILL.md
-         │     └── fallback 用户级 ~/.claude/skills/<name>/SKILL.md
-         │
-         ├── 权限检查：user-invocable / disable-model-invocation
-         ├── 懒加载：skill.path 存在就读文件 + parse_frontmatter
-         │
-         ├── render_prompt()  → 参数替换（$ARGUMENTS, $0, ${CLAUDE_SKILL_DIR}）
-         │
-         └── 根据 context 决定行为：
-               context=inline  → 注入提示词到当前对话
-               context=fork   → 创建子 Agent 独立执行
-```
-
-## 总体设计
-
-### 文件结构
-
-```
-capabilities/skills/
-├── __init__.py       # 公共导出
-├── types.py          # SkillDefinition、ActiveSkill、SkillInvocationResult
-├── registry.py       # SkillRegistry：发现、缓存、查找
-├── runtime.py        # SkillInvocation + ActiveSkillManager（合并 invocation+active）
-└── prompt.py         # 提示词渲染辅助函数
-```
-
-### 模块职责
-
-| 模块 | 职责 | 变更原因 |
-|------|------|---------|
-| `types.py` | 数据结构 | 改 skill 的 frontmatter 字段时改 |
-| `registry.py` | 发现与查找 | 改扫描路径/缓存策略时改 |
-| `runtime.py` | 调用执行 + 激活状态管理 | 改调用逻辑/active 状态时改 |
-| `prompt.py` | 提示词描述生成 | 改 system prompt 中 skill 元数据格式时改 |
+## 核心概念
 
 ### 三层阶段式披露
 
-这是整个系统的核心设计理念——只在需要时给模型刚好够用的上下文：
+这是整个系统的核心设计——只在需要时给模型刚好够用的上下文：
 
 | 层 | 时机 | 内容 | token 成本 |
 |:--:|------|------|:--:|
-| 第一层 | 会话启动 | skill 名称、简短描述、调用方式 | 极低（每 skill 一行） |
-| 第二层 | 用户/模型调用 | 完整 SKILL.md body + 参数渲染 | 中等（按需加载） |
-| 第三层 | 模型主动读取 | supporting files（skill 目录下其他文件） | 按需（模型用 read_file） |
+| 1 | 会话启动 | 名称、一句话描述、调用方式 | 每 skill 一行 |
+| 2 | 调用时 | 完整 SKILL.md body + 参数渲染 | 按需 |
+| 3 | 模型主动读 | supporting files（skill 目录下其他文件） | 按需 |
 
-**为什么不一次性注入所有 skill 内容**：context 窗口是有限的。一个项目可能有几十个 skill，全部注入会严重浪费 token。
+为什么不一次性注入？一个项目可能有几十个 skill——全部注入浪费 token。发现阶段只读 frontmatter（metadata），正文在调用时懒加载。
 
-### 调用模式：inline vs fork
+### inline vs fork
 
-| 模式 | context 字段 | 行为 |
-|------|-------------|------|
-| inline | `context: inline`（默认） | 渲染后的提示词注入当前对话，主 Agent 自己执行 |
-| fork | `context: fork` | 创建独立子 Agent（`is_sub_agent=True`），在隔离上下文中执行 |
+| 模式 | 行为 | 适用 |
+|------|------|------|
+| inline（默认） | 渲染后提示词注入当前对话 | 轻量任务（写 commit message） |
+| fork | 创建独立子 Agent | 重量任务（代码审查），不污染主上下文 |
 
-fork 模式适用场景：skill 涉及大量独立工作（代码审查、批量重构），不应污染主 Agent 的上下文。
+### 参数替换
+
+`$ARGUMENTS`、`$0`、`${CLAUDE_SKILL_DIR}` 在调用时被替换为实际值。如果传了参数但正文没用占位符，参数追加到正文末尾 `ARGUMENTS:` 区块。
 
 ### Active Skill 管理
 
-`ActiveSkillManager` 负责记录当前会话中已激活的 skill。compact 压缩后，通过 `build_context()` 重新注入——保证模型不会因为 compact 丢失 skill 指令。限制最多 8 个 active skill，每 skill 最多 5000 token，总计 25000 token。
+compact 压缩后，已激活的 skill 指令会丢失。`ActiveSkillManager` 在 compact 后通过 `build_context()` 重新注入——最多 8 个 active skill，每个最多 5000 token。
 
-## 详细设计
+## 设计决策
 
-### `registry.py`——Skill 发现
+### 为什么正文懒加载而非一次性加载
 
-`SkillRegistry` 负责扫描 `.claude/skills/` 目录。项目级 skill 覆盖同名的用户级 skill。发现阶段只读 frontmatter——不读 SKILL.md 正文（懒加载）。
+发现阶段只读 frontmatter（metadata），不读 SKILL.md 正文。发现阶段回答"有哪些 skill 可用"（token 极低），调用阶段才付出正文读取和上下文成本。如果一次性加载所有 skill 正文，几十个 skill 可能占掉大半个上下文窗口。
 
-frontmatter 字段：
+### 为什么 fork skill 需要独立 Agent
 
-```yaml
----
-name: code-review
-description: 审查代码变更
-context: fork
-agent: explore
-allowed-tools: read_file, grep_search, list_files
-disallowed-tools: write_file, run_shell
-user-invocable: true
-disable-model-invocation: false
-argument-hint: "branch name"
----
-```
+inline 模式下，skill 的提示词注入主 Agent 的对话——skill 产生的中间搜索结果、错误信息都会留在主上下文里。fork 模式给 skill 独立的消息历史，skill 只把最终结果带回。这等同于轻量级的子 Agent。
 
-`get_skill_by_name(name)` 是单 skill 查找的快捷入口。`discover_skills()` 返回所有已发现的 skill。
+### 为什么项目级覆盖用户级
 
-### `runtime.py`——Skill 运行时
+`.claude/skills/deploy/SKILL.md`（项目级）覆盖 `~/.claude/skills/deploy/SKILL.md`（用户级）。项目可能有特殊的部署流程，覆盖用户的通用模板。优先级链：项目 > 用户。
 
-`SkillInvocation.invoke(name, args, invoked_by)` 是调用入口：
-- 权限检查：`user-invocable` / `disable_model-invocation` 按调用者类型判断
-- 懒加载：通过 `skill.path` 读取完整 SKILL.md，`parse_frontmatter` 提取 body
-- 参数渲染：替换 `$ARGUMENTS`、`$0`（位置参数）、`${CLAUDE_SKILL_DIR}`（skill 目录路径）
+## 代码走读
 
-`ActiveSkillManager` 维护活跃 skill 列表：
-- `record(invocation)` 记录成功调用
-- `disallowed_tools()` 聚合所有活跃 skill 的禁用工具
-- `build_context()` 生成 compact 后重挂的上下文
-- `clear()` 清空
+**`types.py`**：`SkillDefinition`（skill 元数据）+ `SkillInvocationResult`（调用结果）+ `ActiveSkill`（激活状态）。
 
-### `prompt.py`——提示词生成
+**`registry.py`**：`SkillRegistry` 扫描 `.claude/skills/`。`get(name)` 查找，项目覆盖用户。`discover_skills()` 全量列出。
 
-辅助函数用于 system prompt：
-- `build_skill_descriptions()`：生成 skill 列表文字（供 Agent 初始化附件使用）
-- `resolve_skill_prompt()`：渲染单个 skill 的提示词（供兼容调用方）
-- `execute_skill()`：旧调用路径的兼容入口
+**`runtime.py`**：`SkillInvocation.invoke()` 权限检查 + 懒加载 + 参数渲染。`ActiveSkillManager` 记录激活、compact 重挂、聚合 disallowed_tools。
 
-## 硬性约束
+**`prompt.py`**：`build_skill_descriptions()` 生成 system prompt 中的 skill 列表片段。
 
-- 三层披露不可跳过：启动时只加载 metadata，不加载正文
-- fork skill 的子 Agent 不给 agent 工具（防止递归）
-- active skill 的 disallowed_tools 必须在 `ToolRegistry.active_definitions()` 中生效
+## 面试考点
 
-## 隐含要求
+**Q: 为什么三层披露而不一次性加载？**
 
-- 项目级 skill 覆盖用户级同名 skill
-- `SkillRegistry` 的 `reset_skill_cache()` 在测试中清理缓存
-- lazy body loading 不是带缓存的一次性懒加载——每次调用都重新读取文件，确保正文总是最新
-
-## 不能做什么
-
-- 不能把 skill 正文注入 system prompt（必须按需加载）
-- 不能在 fork skill 中让子 Agent 继续 fork 子 Agent
-- 不能把 supporting files 自动注入上下文
-
-## 可能踩坑的地方
-
-### frontmatter 字段命名不一致
-
-代码同时支持 `user-invocable` 和 `user_invocable`（下划线/连字符）。写 SKILL.md 时两种都能用，但 `user-invocable` 是推荐格式，与 Claude Code 保持一致。
-
-### active skill 的 token 预算
-
-`per_skill_token_budget = 5000`，`total_token_budget = 25000`。如果 skill 正文很长，`_truncate_to_tokens` 会截断。截断后的上下文可能丢失关键指令——skill 作者应把关键指令放在 skill 正文开头。
-
-### fork skill 的 agent type
-
-frontmatter 可指定 `agent: explore` 来限制子 Agent 类型。如果指定的类型不存在（如自定义子 Agent 被删除），会回退到 `general` 并附加一条提示。
+上下文窗口有限。几十个 skill 的全文会是巨大的 token 浪费。metadata 足够让模型判断"该不该用这个 skill"——正文在决定使用时才加载。

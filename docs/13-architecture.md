@@ -1,65 +1,39 @@
-# 架构对比与下一步
+# 架构对比
 
-## 与主流 CLI 产品的对比
+## 与主流 CLI 编程 Agent 的对比
 
-| 维度 | nanoCode | Claude Code | Codex CLI | Aider |
+| 维度 | NanoCode | Claude Code | Codex CLI | Aider |
 |------|:--:|:--:|:--:|:--:|
-| **Agent 循环** | AgentLoop + Backend 策略 | Agent SDK | Agent Loop + SDK 调度 | 单 Agent 循环 |
-| **子 Agent** | Fork-and-Return + 并行编排 | Worktree + Skill 调用 | Multi-Agent + CSV 批处理 | 无（社区讨论中） |
-| **Sandbox** | Profile/Backend/Policy 三层 + bwrap 默认 | 容器级沙箱 | OS 级沙箱 | 无内置 sandbox |
-| **工具系统** | ToolRegistry + deferred 激活 | 工具定义 + 权限 | 工具注册 + 沙箱 | Coder 方法 |
-| **上下文压缩** | Budget → Snip → Compact 三层 | 自动压缩 | 自动压缩 | Map/Reduce 压缩 |
-| **记忆系统** | 文件式 + LLM 精选 | 文件式记忆 | 内建持久化 | 无 |
-| **MCP** | Stdio transport + 工具注册 | 完整 MCP 支持 | 内建集成 | 社区插件 |
+| Agent 循环 | AgentLoop + Backend 策略 | Agent SDK | Agent Loop + SDK | 单 Agent |
+| 子 Agent | Fork-and-Return + 并行编排 | Worktree + Skill | Multi-Agent + CSV 批处理 | 无 |
+| Sandbox | Profile/Backend/Policy + bwrap | 容器级 | OS 级 | 无 |
+| 上下文压缩 | Budget→Snip→Compact 三层 | 自动压缩 | 自动压缩 | Map/Reduce |
+| 记忆 | 文件式 + LLM 精选 | 文件式 | 内建持久化 | 无 |
+| MCP | Stdio transport | 完整 MCP | 内建集成 | 社区插件 |
+| 权限 | 四层检查 + deny 不可绕过 | 权限模式 | 沙箱 + 审批 | 确认模式 |
 
-## 当前已知局限
+## 与 Claude Code 的关键差异
 
-### 1. 无系统级 Plan Mode
+NanoCode 的 Agent 循环和工具系统借鉴了 Claude Code 的设计思想（Fork-and-Return、ToolRegistry、deferred 工具），但在几个点上做了不同选择：
 
-当前只有 `plan` 子 Agent 类型，没有全局"先规划再执行"的模式。主 Agent 拿到 plan 输出后是否按计划执行依赖自觉性。
+- **双后端并存**：Claude Code 是纯 Anthropic 的。NanoCode 同时支持 OpenAI-compatible 后端，双消息历史分开存储而非统一抽象。
+- **Sandbox 更轻**：Claude Code 的 sandbox 是容器级的，所有操作在容器内。NanoCode 的 bwrap 只覆盖 run_shell，文件工具在宿主机执行。
+- **没有 Worktree 隔离**：Claude Code 的子 Agent 在独立 git worktree 中运行。NanoCode 还没做这个——并行子 Agent 会有文件冲突风险。
 
-### 2. 无 worktree 隔离
+## 与 Codex CLI 的关键差异
 
-并行子 Agent 修改文件时可能产生冲突。Codex CLI 用 git worktree 隔离子 Agent 的工作区——nanocode 尚无此机制。
+- **配置方式**：Codex CLI 用 TOML 文件定义子 Agent，NanoCode 用 Markdown frontmatter。
+- **CSV 批处理**：Codex CLI 有 `spawn_agents_on_csv`，NanoCode 没有。
+- **Prompt caching 策略**：Codex CLI 的文档强调了缓存友好的工具排序和 prompt 前缀设计。NanoCode 的系统提示词是固定的但工具列表不稳定。
 
-### 3. 子 Agent 无持久化
+## NanoCode 的独特设计
 
-子 Agent 的结果只在当前对话中可用。`/clear` 或 compact 后丢失。可以引入 ArtifactStore 引用机制。
-
-### 4. 自定义 Agent 无热加载
-
-修改 `.md` 文件后需重启才生效。可改为按 mtime 判断缓存过期。
-
-### 5. 无 streaming tool output
-
-长 shell 命令只能等执行完才看到结果。实时 streaming 会显著提升用户体验。
-
-### 6. 无 prompt caching 策略
-
-当前 system prompt 稳定，但工具定义的顺序和内容每次请求可能不同。这会导致 Anthropic 的工具缓存 miss。
-
-## 性能优化方向
-
-| 方向 | 说明 |
-|------|------|
-| Prompt caching | 固定 tools 排序，tool schema 稳定化以利用 Anthropic cache |
-| 工具结果缓存 | 相同参数的 read_file 在短时间内不重复读 |
-| 并行工具调用 | 当前支持的并发安全工具扩展（如 web_fetch） |
-| 子 Agent 结果缓存 | 相同 prompt 的 explore Agent 短时缓存结果 |
-
-## 后续 Roadmap
-
-| 优先级 | 功能 | 说明 |
-|:--:|------|------|
-| P0 | SubAgent 并行编排 | 已设计（subagent.md），待实施 |
-| P1 | 系统级 Plan Mode | 全局"规划-执行"模式切换 |
-| P2 | 子 Agent 失败重试 | Orchestrator 中增加可重试错误判断 |
-| P3 | 自定义 Agent 热加载 | mtime 缓存过期策略 |
-| P4 | ArtifactStore 引用机制 | 子 Agent 结果持久化引用 |
-| P5 | Sandbox 完整实现 | 按 sandbox.md 设计完善 bwrap backend |
+1. **Profile/Backend/Policy 三层 sandbox**：用户只需理解 Profile，不需要记住 bwrap 参数。这是对 Codex CLI sandbox 思路的借鉴 + 简化。
+2. **三层压缩流水线**：Budget → Snip → Compact 的递进策略，比直接用模型生成摘要更节省 API 成本。
+3. **Agent 从 Mixin 改为纯状态容器**：这是架构演进的结果，展示了从隐式耦合到显式组合的工程决策。
 
 ## 面试考点
 
-**Q: 如果你是 tech lead，接下来 3 个月的 roadmap 是什么？**
+**Q: 和 Claude Code 最大的架构差异是什么？**
 
-第 1 个月：完成 SubAgent 并行编排 + 超时预算控制（P0）。第 2 个月：实现系统级 Plan Mode 和 sandbox 的 bwrap backend。第 3 个月：补齐自定义 Agent 热加载、子 Agent 结果持久化、prompt caching 策略。
+NanoCode 的 Agent 是纯状态容器——所有行为外移。Claude Code 的 Agent 可能是更紧密的内部实现。NanoCode 的双后端设计也是一个显著差异——不是所有 Agent 都支持 OpenAI-compatible 后端。

@@ -1,79 +1,64 @@
-# 系统提示词工程
+# 上下文管理
 
-## 概述
+## 为什么需要上下文管理
 
-系统提示词是 Agent 的"角色定义"——它告诉模型自己是谁、能做什么、什么风格。nanocode 的提示词设计核心是**稳定部分与动态部分分离**——稳定部分利于 Anthropic prompt caching，动态部分通过 user context 注入。
+模型每次 API 调用时，系统需要组装一份"输入包"——system prompt + project instructions + git status + skill list + 消息历史。这件事看起来简单（拼字符串），但有两个真实挑战：
 
-## 架构
+1. **什么该放进 system prompt，什么该放进动态附件？** system prompt 影响 Anthropic 的 prompt cache 命中率——改一个字缓存就 miss。
+2. **对话太长了怎么办？** 消息历史超过了上下文窗口，必须压缩但不丢关键信息。
 
-```
-┌─────────────────────────────┐
-│     STABLE_SYSTEM_PROMPT    │  ← 固定模板，缓存友好
-│  - System（角色和规则）       │
-│  - Doing tasks（任务指南）    │
-│  - Using your tools（工具使用）│
-│  - Output efficiency（效率）  │
-├─────────────────────────────┤
-│  DYNAMIC_BOUNDARY 分隔标记   │
-├─────────────────────────────┤
-│     启动上下文（首次注入）     │
-│  - 当前日期、工作区、平台      │
-│  - CLAUDE.md 项目指令        │
-│  - Git 状态快照              │
-├─────────────────────────────┤
-│     动态附件                  │
-│  - Skill 列表                │
-│  - Deferred tool 列表        │
-│  - MCP tool delta 通知       │
-│  - 记忆召回结果               │
-└─────────────────────────────┘
-```
+上下文管理解决的就是这两个问题。
 
-## 稳定提示词的设计
+## 核心概念
 
-`STABLE_SYSTEM_PROMPT` 是 `context/builder.py` 中定义的固定模板。它包含四个 section：
-
-**System**：告诉模型它是 Nano Code，一个编程助手。说明工具执行有权限模式，对话会自动压缩。这些是"元指令"——不随任务变化。
-
-**Doing tasks**：关于如何完成任务的约束。"先读后改"、"不要创建不必要的文件"、"不要估算时间"——这些是行为规范。
-
-**Using your tools**：工具使用的优先级。"不要用 run_shell 当 read_file 用"、"可以并行调用独立工具"——这些是对工具使用的具体指导。
-
-**Output efficiency**："直接说重点"、"尝试最简单的方案"——减少 token 浪费。
-
-**为什么要稳定**：Anthropic 的 prompt caching 会缓存 system prompt 前缀。如果每次请求都改 system prompt，缓存永远不命中。稳定模板 + 动态注入的分离开销极小。
-
-## 动态附件
-
-动态内容一律通过 `<system-reminder>` 标签作为 user context 注入，不改 system prompt：
-
-- **启动上下文**：`build_startup_context()` 生成——日期、工作区、平台、Shell、CLAUDE.md 项目指令、Git 状态。首次对话时注入。
-- **Skill 列表**：`render_skill_listing_attachment()` 只列出 skill 名称和调用方式，不注入正文（三层披露的第一层）。
-- **Deferred tool 列表**：`render_deferred_tools_attachment()` 告知模型有哪些工具可通过 `tool_search` 激活。
-- **MCP tool delta**：`render_mcp_delta_attachment()` 在 MCP 服务工具列表变化时通知模型。
-- **记忆召回**：`format_memories_for_injection()` 注入 LLM 精选的最相关记忆，附带 freshness warning。
-
-## CLAUDE.md 加载
-
-`context/sources.py` 的 `load_project_instructions()` 扫描 `CLAUDE.md` 文件链：
+### 稳定 vs 动态分离
 
 ```
-优先级从低到高：
-  ~/.claude/CLAUDE.md        # 用户全局
+STABLE_SYSTEM_PROMPT（固定模板）     ← 利于 Anthropic prompt caching
+─────────────────────────────
+DYNAMIC_BOUNDARY 分隔标记
+─────────────────────────────
+启动上下文（日期/CLAUDE.md/Git）     ← 首次注入
+动态附件（Skill/Deferred Tools/MCP）  ← 按需注入
+记忆召回结果                         ← 每次用户回合
+```
+
+所有动态内容通过 `append_user_context()` 以 user message 形式注入——不改 system prompt。system prompt 的稳定性 = cache 命中率。
+
+### CLAUDE.md 加载链
+
+```
+~/.claude/CLAUDE.md          # 用户全局（最低优先级）
   → 各级目录 CLAUDE.md        # 项目
   → .claude/CLAUDE.md         # 项目配置
   → .claude/rules/*.md        # 按路径匹配的规则
-  → CLAUDE.local.md           # 本地覆盖（不提交 Git）
+  → CLAUDE.local.md           # 本地覆盖（最高优先级）
 ```
 
-支持 `@path/to/file.md` include 语法（最大深度 5 层，总预算 60K 字符）。
+支持 `@path/to/file.md` include 语法，最大深度 5 层，总预算 60K 字符。
 
-## Git 上下文快照
+## 设计决策
 
-启动时一次性收集——branch、最近 5 个 commit、`git status --short`。**为什么不实时更新**：对话中代码不断变化，实时更新会导致 context 不一致和被压缩的旧信息互相矛盾。一次性快照明确标注 "snapshot from the start of the conversation"。
+### 为什么 Git 上下文是一次性快照
+
+对话中代码被 Agent 不断修改——如果实时更新 Git status，消息历史里会出现多个版本的 status 互相矛盾。一次性快照明确标注"这是对话开始时拍的"。
+
+### 为什么三层压缩有不同的触发阈值
+
+阈值递增（50% → 60% → 85%），从温和到激进。每层的成本递增：Budget 是纯字符串操作（零 API 成本），Snip 需要先扫全量消息建索引（O(n) 内存），Compact 是一次模型调用（消耗 token）。只在必要时才付出更高的成本。
+
+## 代码走读
+
+**`builder.py`**：`STABLE_SYSTEM_PROMPT` 固定模板 + `build_startup_context()` + 5 个 `render_*()` 附件渲染函数。
+
+**`sources.py`**：`load_project_instructions()` CLAUDE.md 链加载、`collect_git_context()` 并行 5 个 git 命令、`parse_frontmatter()` YAML 解析。类型定义（`PromptDiagnostic`、`PromptBundle`）也在此文件——避免 builder.py 和 sources.py 循环导入。
 
 ## 面试考点
 
 **Q: 改什么内容不会让 Anthropic prompt cache 失效？**
 
-任何在 `DYNAMIC_BOUNDARY` 分隔标记**之后**的变化都不会使缓存失效。所以在 user context 中追加附件、修改注入时机、调整 CLAUDE.md 内容——都安全。但修改 `STABLE_SYSTEM_PROMPT` 的任何文字都会让所有缓存 miss。
+任何在 `DYNAMIC_BOUNDARY` 之后的变化都不影响缓存。所以改 CLAUDE.md 内容、调整附件注入时机——都安全。但改 `STABLE_SYSTEM_PROMPT` 任何文字都会 miss。
+
+**Q: compact 失败怎么办？**
+
+降级——保留未压缩的历史继续对话，不中断会话。compact 本身是一次模型调用（`max_tokens=2048`），可能因 API 限流或网络问题失败。
