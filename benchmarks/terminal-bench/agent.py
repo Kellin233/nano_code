@@ -54,35 +54,37 @@ class NanoCodeAgent(BaseAgent):
         """Install NanoCode and dependencies in the Docker environment."""
         self.logger.info("Setting up NanoCode agent...")
 
-        # Install NanoCode from local source or PyPI
-        local_nanocode = Path("/root/EvoCode/nanocode")
-        if local_nanocode.exists():
-            # Install from local source
-            result = await environment.exec(
-                f"cd {local_nanocode} && pip install -e . 2>&1 | tail -5",
-                timeout=120,
+        # Install from GitHub (PyPI 暂不可用)
+        repo_url = os.environ.get("NANOCODE_REPO_URL", "https://github.com/Kellin233/nano_code.git")
+        result = await environment.exec(
+            f"pip install git+{repo_url} 2>&1 | tail -5",
+            timeout=120,
+        )
+        self.logger.info(f"Install NanoCode: {result.stdout}")
+
+        # 解析模型名（harbor 传 "openai/deepseek-chat" 或 "anthropic/claude-sonnet-4-6"）
+        model_full = self.model_name or "anthropic/claude-sonnet-4-6"
+        provider, model_name = model_full.split("/", 1) if "/" in model_full else ("anthropic", model_full)
+
+        # 按 provider 设置环境变量
+        if provider == "openai":
+            api_key = os.environ.get("OPENAI_API_KEY", "")
+            api_base = os.environ.get("OPENAI_BASE_URL", "https://api.deepseek.com")
+            env_setup = (
+                f"export OPENAI_API_KEY='{api_key}'\n"
+                f"export OPENAI_BASE_URL='{api_base}'\n"
+                f"export NANO_CODE_MODEL='{model_name}'\n"
             )
-            self.logger.info(f"Install (local): {result.stdout}")
         else:
-            # Install from PyPI
-            result = await environment.exec(
-                "pip install nanocode 2>&1 | tail -5",
-                timeout=120,
-            )
-            self.logger.info(f"Install (pypi): {result.stdout}")
+            api_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            api_base = os.environ.get("ANTHROPIC_BASE_URL", "")
+            env_setup = f"export ANTHROPIC_API_KEY='{api_key}'\n"
+            if api_base:
+                env_setup += f"export ANTHROPIC_BASE_URL='{api_base}'\n"
+            env_setup += f"export NANO_CODE_MODEL='{model_name}'\n"
 
-        # Set up API key
-        api_key = os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY", "")
-        openai_base = os.environ.get("OPENAI_BASE_URL", "")
-        model = self.model_name or "claude-sonnet-4-6"
-
-        env_setup = f"export ANTHROPIC_API_KEY='{api_key}'\n"
-        if openai_base:
-            env_setup += f"export OPENAI_BASE_URL='{openai_base}'\n"
-            env_setup += f"export OPENAI_API_KEY='{api_key}'\n"
-            env_setup += f"export NANO_CODE_MODEL='{model}'\n"
         await environment.exec(env_setup)
-        self.logger.info(f"Setup complete (model={model})")
+        self.logger.info(f"Setup complete ({provider}/{model_name})")
 
     async def run(
         self,
@@ -96,8 +98,10 @@ class NanoCodeAgent(BaseAgent):
         # Escape the instruction for shell
         safe_instruction = instruction.replace("'", "'\"'\"'")
 
+        model_name = self.model_name.split("/", 1)[1] if "/" in (self.model_name or "") else (self.model_name or "")
+        model_flag = f"--model {model_name}" if model_name else ""
         result = await environment.exec(
-            f"nanocode --yolo --max-turns 30 --max-cost 5.00 '{safe_instruction}'",
+            f"nanocode --yolo --max-turns 30 --max-cost 5.00 {model_flag} '{safe_instruction}'",
             timeout=600,
         )
 

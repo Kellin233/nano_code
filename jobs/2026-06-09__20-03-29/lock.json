@@ -1,0 +1,82 @@
+{
+    "schema_version": 1,
+    "created_at": "2026-06-09T12:03:31.512474Z",
+    "harbor": {
+        "version": "0.13.1",
+        "git_commit_hash": "2922220bf78bf22e2ff3b30147cbbe15ad02c7c9",
+        "is_editable": false
+    },
+    "invocation": [
+        "/root/miniconda3/envs/terminalbench/bin/harbor",
+        "run",
+        "--agent-import-path",
+        "benchmarks.terminal-bench.agent:NanoCodeAgent",
+        "--model",
+        "anthropic/claude-sonnet-4-6",
+        "--n-attempts",
+        "1",
+        "--ae",
+        "ANTHROPIC_API_KEY=****",
+        "--dataset",
+        "terminal-bench@2.0",
+        "--n-concurrent",
+        "1",
+        "--n-tasks",
+        "1"
+    ],
+    "n_concurrent_trials": 1,
+    "retry": {
+        "max_retries": 0,
+        "exclude_exceptions": [
+            "AgentTimeoutError",
+            "VerifierOutputParseError",
+            "VerifierTimeoutError",
+            "RewardFileNotFoundError",
+            "RewardFileEmptyError"
+        ],
+        "wait_multiplier": 1.0,
+        "min_wait_sec": 1.0,
+        "max_wait_sec": 60.0
+    },
+    "trials": [
+        {
+            "task": {
+                "name": "gpt2-codegolf",
+                "type": "git",
+                "digest": "sha256:e2617991ffbe474e67ea4667c352e181982179e1be3229cce65e2c15248fc1df",
+                "source": "terminal-bench",
+                "path": "gpt2-codegolf",
+                "git_url": "https://github.com/laude-institute/terminal-bench-2.git",
+                "git_commit_id": "69671fbaac6d67a7ef0dfec016cc38a64ef7a77c"
+            },
+            "timeout_multiplier": 1.0,
+            "agent": {
+                "import_path": "benchmarks.terminal-bench.agent:NanoCodeAgent",
+                "model_name": "anthropic/claude-sonnet-4-6",
+                "skills": [],
+                "extra_allowed_hosts": [],
+                "kwargs": {},
+                "env": {
+                    "ANTHROPIC_API_KEY": "****"
+                },
+                "mcp_servers": []
+            },
+            "skills": [],
+            "environment": {
+                "type": "docker",
+                "force_build": false,
+                "delete": true,
+                "cpu_enforcement_policy": "auto",
+                "memory_enforcement_policy": "auto",
+                "extra_docker_compose": [],
+                "env": {},
+                "kwargs": {},
+                "extra_allowed_hosts": []
+            },
+            "verifier": {
+                "env": {},
+                "disable": false
+            }
+        }
+    ]
+}

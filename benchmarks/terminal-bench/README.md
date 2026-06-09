@@ -38,29 +38,58 @@ docker compose version
 
 ### 2. 跑 Benchmark
 
+#### 使用 DeepSeek 模型
+
+```bash
+export OPENAI_API_KEY=你的DeepSeek的key
+export OPENAI_BASE_URL=https://api.deepseek.com   # 或用你的中转地址
+export PYTHONPATH=/root/EvoCode/nanocode:$PYTHONPATH
+
+/root/miniconda3/envs/terminalbench/bin/harbor run \
+    --agent-import-path benchmarks.terminal-bench.agent:NanoCodeAgent \
+    --model openai/deepseek-chat \
+    --ae OPENAI_API_KEY="${OPENAI_API_KEY}" \
+    --ae OPENAI_BASE_URL="${OPENAI_BASE_URL}" \
+    --dataset terminal-bench@2.0 \
+    --n-tasks 1
+```
+
+#### 使用 Anthropic 模型
+
 ```bash
 export ANTHROPIC_API_KEY=你的key
 export PYTHONPATH=/root/EvoCode/nanocode:$PYTHONPATH
 
-# 跑 1 个任务测试管道
 /root/miniconda3/envs/terminalbench/bin/harbor run \
     --agent-import-path benchmarks.terminal-bench.agent:NanoCodeAgent \
     --model anthropic/claude-sonnet-4-6 \
-    --n-attempts 1 \
     --ae ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
     --dataset terminal-bench@2.0 \
-    --n-concurrent 1 \
     --n-tasks 1
+```
 
-# 跑全量测试
+#### 使用其他 OpenAI-compatible 模型
+
+```bash
+# 比如 gpt-5.5、qwen、glm 等任何兼容 OpenAI 接口的模型
 /root/miniconda3/envs/terminalbench/bin/harbor run \
     --agent-import-path benchmarks.terminal-bench.agent:NanoCodeAgent \
-    --model anthropic/claude-sonnet-4-6 \
-    --n-attempts 1 \
-    --ae ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY}" \
+    --model openai/gpt-5.5 \
+    --ae OPENAI_API_KEY="${OPENAI_API_KEY}" \
+    --ae OPENAI_BASE_URL="${OPENAI_BASE_URL}" \
     --dataset terminal-bench@2.0 \
-    --n-concurrent 4
+    --n-tasks 1
 ```
+
+**`--model` 参数格式**：`provider/model_name`。`provider` 固定为 `openai` 或 `anthropic`。agent 自动解析并设置对应环境变量。
+
+#### 模型映射逻辑
+
+| `--model` 参数 | 实际配置 |
+|---------------|---------|
+| `openai/deepseek-chat` | `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `NANO_CODE_MODEL=deepseek-chat` |
+| `openai/gpt-5.5` | `OPENAI_API_KEY` + `OPENAI_BASE_URL` + `NANO_CODE_MODEL=gpt-5.5` |
+| `anthropic/claude-sonnet-4-6` | `ANTHROPIC_API_KEY` + `NANO_CODE_MODEL=claude-sonnet-4-6` |
 
 **参数说明**：
 
@@ -114,11 +143,76 @@ export OPENAI_BASE_URL=你的endpoint
 
 Harbor 框架负责：下载任务数据集 → 创建 Docker 容器（带 tmux）→ 调用 agent 的 `setup()` 和 `run()` → 评测任务完成情况 → 生成报告。
 
+## Docker 任务镜像拉取问题
+
+Terminal-Bench 的任务镜像托管在 Docker Hub（`registry-1.docker.io`），国内网络可能无法直接拉取。几种解决方案：
+
+### 方案 1：换镜像加速器（最快）
+
+尝试覆盖更全的加速器：
+
+```bash
+sudo tee /etc/docker/daemon.json <<'EOF'
+{
+  "registry-mirrors": [
+    "https://docker.1ms.run",
+    "https://docker.xuanyuan.me",
+    "https://docker.m.daocloud.io",
+    "https://mirror.ccs.tencentyun.com"
+  ]
+}
+EOF
+sudo service docker restart
+docker pull alexgshaw/gpt2-codegolf:20251031
+```
+
+多试几个加速器，不同的服务缓存范围不同。`docker.1ms.run` 和 `docker.xuanyuan.me` 覆盖率较广。
+
+### 方案 2：配置 HTTP 代理
+
+```bash
+sudo mkdir -p /etc/systemd/system/docker.service.d
+sudo tee /etc/systemd/system/docker.service.d/proxy.conf <<'EOF'
+[Service]
+Environment="HTTP_PROXY=http://你的代理地址:端口"
+Environment="HTTPS_PROXY=http://你的代理地址:端口"
+Environment="NO_PROXY=localhost,127.0.0.1"
+EOF
+sudo systemctl daemon-reload
+sudo service docker restart
+docker pull alexgshaw/gpt2-codegolf:20251031
+```
+
+### 方案 3：从另一台机器导出镜像
+
+在有 Docker Hub 访问的机器上：
+
+```bash
+docker pull alexgshaw/gpt2-codegolf:20251031
+docker save alexgshaw/gpt2-codegolf:20251031 -o gpt2-codegolf.tar
+# 拷贝 tar 文件到这台机器
+```
+
+在这台机器上：
+
+```bash
+docker load -i gpt2-codegolf.tar
+```
+
+Terminal-Bench 检测到本地已有镜像后会跳过拉取。
+
+### 验证
+
+```bash
+docker pull alexgshaw/gpt2-codegolf:20251031
+# 看到 Downloading 或 Image is up to date 即成功
+```
+
 ## 已知限制
 
-- 任务镜像托管在 Docker Hub（`registry-1.docker.io`），需要网络可达
+- 任务镜像托管在 Docker Hub，需要网络可达或镜像加速器
 - Harbor 需要 Python 3.12+，与 NanoCode 主环境（Python 3.10）隔离
-- 当前 agent 没有自定义安装脚本——使用 `pip install nanocode`，需要 NanoCode 在 PyPI 或 GitHub 上可公开访问
+- NanoCode 需通过 GitHub 安装到 Docker 容器内
 
 ## 关键文件
 

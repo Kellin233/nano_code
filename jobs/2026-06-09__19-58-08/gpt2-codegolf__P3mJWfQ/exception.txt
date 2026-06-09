@@ -1,0 +1,22 @@
+Traceback (most recent call last):
+  File "/root/miniconda3/envs/terminalbench/lib/python3.12/site-packages/harbor/trial/trial.py", line 291, in run
+    await self._prepare()
+  File "/root/miniconda3/envs/terminalbench/lib/python3.12/site-packages/harbor/trial/trial.py", line 318, in _prepare
+    await self._setup_agent_environment()
+  File "/root/miniconda3/envs/terminalbench/lib/python3.12/site-packages/harbor/trial/trial.py", line 782, in _setup_agent_environment
+    await self._start_agent_environment()
+  File "/root/miniconda3/envs/terminalbench/lib/python3.12/site-packages/harbor/trial/trial.py", line 788, in _start_agent_environment
+    await asyncio.wait_for(
+  File "/root/miniconda3/envs/terminalbench/lib/python3.12/asyncio/tasks.py", line 520, in wait_for
+    return await fut
+           ^^^^^^^^^
+  File "/root/miniconda3/envs/terminalbench/lib/python3.12/site-packages/harbor/environments/docker/docker.py", line 537, in start
+    await self._run_docker_compose_command(["up", "--detach", "--wait"])
+  File "/root/miniconda3/envs/terminalbench/lib/python3.12/site-packages/harbor/environments/docker/docker.py", line 417, in _run_docker_compose_command
+    raise RuntimeError(
+RuntimeError: Docker compose command failed for environment gpt2-codegolf. Command: docker compose --project-name gpt2-codegolf__p3mjwfq --project-directory /root/.cache/harbor/tasks/CGqXnFmcaVcQCTbCZMpg2T/gpt2-codegolf/environment -f /tmp/tmp7w0l8_hp/gpt2-codegolf__P3mJWfQ-docker-compose-resources.json -f /root/miniconda3/envs/terminalbench/lib/python3.12/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /tmp/tmpsgifdil_/docker-compose-mounts.json up --detach --wait. Return code: 125. Stdout: unknown flag: --project-name
+
+Usage:  docker [OPTIONS] COMMAND [ARG...]
+
+Run 'docker --help' for more information
+. Stderr: None. 

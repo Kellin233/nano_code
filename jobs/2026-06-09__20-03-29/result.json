@@ -1,0 +1,37 @@
+{
+    "id": "83f120db-6f43-41d6-95c6-7575e5c6c483",
+    "started_at": "2026-06-09T20:03:31.507401",
+    "updated_at": "2026-06-09T20:03:51.360435",
+    "finished_at": "2026-06-09T20:03:51.360435",
+    "n_total_trials": 1,
+    "stats": {
+        "n_completed_trials": 1,
+        "n_errored_trials": 1,
+        "n_running_trials": 0,
+        "n_pending_trials": 0,
+        "n_cancelled_trials": 0,
+        "n_retries": 0,
+        "evals": {
+            "nanocode__claude-sonnet-4-6__terminal-bench": {
+                "n_trials": 0,
+                "n_errors": 1,
+                "metrics": [
+                    {
+                        "mean": 0.0
+                    }
+                ],
+                "pass_at_k": {},
+                "reward_stats": {},
+                "exception_stats": {
+                    "RuntimeError": [
+                        "gpt2-codegolf__PuupeZY"
+                    ]
+                }
+            }
+        },
+        "n_input_tokens": null,
+        "n_cache_tokens": null,
+        "n_output_tokens": null,
+        "cost_usd": null
+    }
+}
