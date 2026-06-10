@@ -11,8 +11,8 @@ from __future__ import annotations
 import argparse
 import os
 
-from ..capabilities.sandbox.config import build_sandbox_config
-from ..runtime.agent import RuntimeConfig
+from .core.sandbox.config import build_sandbox_config
+from ..agent.agent import RuntimeConfig
 
 
 def parse_args() -> argparse.Namespace:

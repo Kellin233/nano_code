@@ -1,6 +1,0 @@
-=== STDOUT ===
-
-=== STDERR ===
-/root/miniconda3/envs/medicalgpt/bin/python3: No module named nanocode.__main__; 'nanocode' is a package and cannot be directly executed
-
-=== RC: 1

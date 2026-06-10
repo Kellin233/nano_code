@@ -1,63 +1,149 @@
-# CLI / TUI / 会话
+# CLI / TUI / Server / 会话
 
-## 1. 为什么需要这三层
+## 1. 为什么需要这几层
 
-从用户敲下 `nanocode "修 bug"` 到 Agent 开始干活——中间要处理三件事：解析参数、组装依赖、选交互模式。会话持久化让用户 `/exit` 后 `--resume` 继续。
+用户入口、交互 UI、headless server 和会话持久化都在 Agent core 之外。它们只负责把用户输入变成 Session 调用，再消费 RuntimeEvent 流。
 
-三个模块都是"外层"——不包含对话逻辑。
+当前装配边界是：
 
-## 2. 核心概念
+- `cli/main.py` 负责入口和模式选择。
+- `cli/session.py` 负责创建和连接所有运行对象。
+- `cli/thread.py` 负责把 `AgentSession` 包成 server/TUI 可消费的事件流，并处理 approvals。
+- `tui/` 负责交互式 REPL 和渲染。
+- `cli/core/server/` 和 `cli/core/protocol/` 负责 JSONL 协议 server。
+- `agent/harness/session/` 负责 session 和 artifact 持久化。
 
-### 2.1 CLI → RuntimeConfig → 三对象
-
-`parse_args()` 解析 CLI 参数→`resolve_runtime_config()` 合并环境变量→`Agent(config)` + `create_backend(config)` + `AgentLoop(agent, backend)`→有 prompt？一次性模式 : TUI 模式。
-
-### 2.2 三种消费端，一个事件流
-
-`AgentLoop.run()` 产出 `RuntimeEvent` 流。一次性：`_render_event()` 直接打印。TUI：`TuiApp._chat()` Rich 渲染。Server：`event.to_dict()` JSONL 转发。
-
-### 2.3 会话持久化
-
-`SessionEventStore`：append-only JSONL 文件，`replay()` 恢复事件列表。`ArtifactStore`：大结果（>30KB）落盘。`save_session()`/`load_session()`：保存/恢复消息历史 JSON。
-
-## 3. 总体设计
+## 2. 文件结构
 
 ```
-cli/     — args.py（参数解析+环境变量合并）+ main.py（组装+启动）
-tui/     — app.py（REPL 生命周期）+ input.py（prompt_toolkit）+ renderer.py（Rich）+ commands.py + state.py + theme.py
-session/ — __init__.py（save/load/list）+ event_store.py（JSONL）+ artifacts.py（大结果）
+cli/
+├── args.py             # argparse + RuntimeConfig 构造
+├── main.py             # CLI 入口，一次性/TUI/server 模式选择
+├── session.py          # AgentSession，唯一装配点
+├── thread.py           # RuntimeThread，事件流包装和 approvals
+├── logging_config.py
+└── core/
+    ├── protocol/       # JSONL protocol messages
+    └── server/         # NanoCodeServer + transports
+
+tui/
+├── app.py
+├── commands.py
+├── input.py
+├── renderer.py
+├── state.py
+└── theme.py
+
+agent/harness/session/
+├── __init__.py         # save/load/list session
+├── event_store.py      # events.jsonl
+└── artifacts.py        # large artifacts
 ```
 
-## 4. 详细设计
+## 3. 三种运行模式
 
-**`cli/args.py`**：argparse 定义所有参数。`resolve_permission_mode()` yolo>accept-edits>dont-ask>default。`resolve_runtime_config()` 合并 CLI+环境变量→RuntimeConfig。
+### 一次性模式
 
-**`cli/main.py`**：`main()` 组装 Agent+Backend+AgentLoop。`_run_once()` 阻塞确认回调+事件渲染+session resume。`_run_interactive()` 委托 TuiApp。
+```
+nanocode "fix bug"
+  → cli/main.py
+  → create_session(...)
+  → session.chat(prompt)
+  → 直接渲染 RuntimeEvent
+```
 
-**`tui/app.py`**：`TuiApp.run()` 交互循环——read_line→handle_line→command 分发或 `_chat(prompt)`→驱动 AgentLoop+渲染事件。
+### TUI 模式
 
-**`session/`**：JSONL 追加+replay+next_seq。ArtifactStore.write_text() 落盘大结果。
+```
+nanocode
+  → TuiApp.run()
+  → 用户输入 / 命令分发
+  → session.run(prompt)
+  → renderer 渲染 RuntimeEvent
+```
 
-## 5. 设计决策
+### Server 模式
 
-### 为什么 CLI 层不含对话逻辑
+```
+nanocode --server stdio
+  → NanoCodeServer
+  → RuntimeThread
+  → AgentSession
+  → RuntimeEvent.to_dict()
+  → JSONL protocol
+```
 
-入口含对话→加参数要理解循环，改渲染要改入口。拆成 cli/（组装）→runtime/（执行）→tui/（渲染）变更原因独立。
+## 4. AgentSession
 
-### 为什么三种模式共用 AgentLoop
+`AgentSession` 是运行时装配边界。它创建：
 
-对话逻辑完全一样——只是消费端不同。共用保证行为一致。
+- `Agent`
+- provider backend
+- `ToolRegistry` / `ToolRuntime`
+- `SandboxManager`
+- `McpManager`
+- `SkillInvocation` / `ActiveSkillManager`
+- `MemoryRuntime`
+- `HookManager`
+- `ExtensionRunner`
+- `Compressor`
+- `AgentLoop`
 
-### 为什么会话用 JSONL
+它也负责桥接：
 
-纯文本、可 grep、可 tail。会话数量少，不需要 SQLite。
+- ToolRuntime 的 before/after tool extension hook。
+- Agent 生命周期事件到 ExtensionRunner。
+- Loop 的 `execute_tools` 回调。
+- Compressor 的 summary callable。
+- MemoryRuntime 的 side-query callable。
 
-## 6. 面试考点
+## 5. RuntimeThread
 
-**Q: 为什么三种模式共用 AgentLoop？** 保证行为一致——不会"一次性模式和 TUI 结果不同"。
+`RuntimeThread` 是 server/TUI 友好的事件流包装：
 
-**Q: 为什么 JSONL 而非 SQLite？** 纯文本可审计、适合少量会话。SQLite 更适合大量查询。
+- 持有 `AgentSession`。
+- 维护 `SessionEventStore`。
+- 管理 `ApprovalManager`。
+- 给 server 暴露 `submit()`、`abort()`、`compact()`、`restore_session()`。
 
-## 7. 代码导读
+`AgentSession.approvals` 不是权限状态的唯一来源；协议层 approvals 由 `RuntimeThread` 管理。
 
-**关键行号**：`cli/args.py` resolve_runtime_config()、`cli/main.py` main()+_run_once()、`tui/app.py` TuiApp.run()+_chat()、`session/event_store.py` replay()。
+## 6. 会话持久化
+
+```
+~/.nanocode/sessions/
+├── <session-id>.json              # snapshot 兼容路径
+└── <session-id>/
+    ├── events.jsonl               # RuntimeEvent append-only log
+    ├── artifacts/
+    └── tool-results/
+```
+
+`SessionEventStore` 保存事件流，`ArtifactStore` 保存大 artifact，`save_session/load_session` 继续支持 snapshot resume。
+
+## 7. 设计决策
+
+### 为什么 CLI 不直接组装所有能力
+
+如果 `main.py` 直接创建工具、MCP、memory、extensions，入口会变成第二个 runtime。把装配集中到 `AgentSession` 后，CLI、TUI、Server 都复用同一条路径。
+
+### 为什么 Server 放到 cli/core
+
+Server/protocol 是应用层能力，不属于 Agent core。它消费 RuntimeEvent，但不改变 Agent 状态机。
+
+### 为什么会话在 harness
+
+会话持久化是运行框架机制，需要文件 I/O，但不应依赖 CLI 或 TUI。放在 harness 符合“怎么运转”的边界。
+
+## 8. 代码导读
+
+```
+cli/args.py
+cli/main.py
+cli/session.py
+cli/thread.py
+cli/core/server/app_server.py
+cli/core/protocol/messages.py
+tui/app.py
+agent/harness/session/event_store.py
+```

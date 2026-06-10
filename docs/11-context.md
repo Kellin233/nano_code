@@ -1,82 +1,149 @@
-# 上下文管理
+# 上下文管理与压缩
 
 ## 1. 为什么需要上下文管理
 
-模型每次 API 调用前，系统组装"输入包"——system prompt + CLAUDE.md + Git 状态 + skill 列表 + 消息历史。这看起来简单（拼字符串），但有两个真实挑战。
+每次模型调用都需要组装 system prompt、启动上下文、动态附件、记忆和消息历史。与此同时，对话会不断增长，工具输出可能很大，必须在超过上下文窗口前压缩。
 
-**挑战一**：什么该放进稳定 system prompt（影响 Anthropic prompt cache 命中率），什么该作为动态附件注入？改一个字就可能让整个 system prompt 缓存 miss。
+当前架构中：
 
-**挑战二**：对话太长时怎么压缩消息历史而不丢关键信息？超过 200K token 窗口就报错——但 compact 本身是一次模型调用（消耗 token）。
+- 上下文构建位于 `agent/harness/context/`。
+- 消息压缩位于 `agent/harness/compressor.py`。
+- 单个工具大结果持久化位于 `cli/core/tools/runtime.py`。
+- 模型摘要 callable 由 `cli/session.py` 注入 Compressor，harness 不 import provider。
 
-上下文管理解决的就是这两个问题。
-
-## 2. 核心概念
-
-### 2.1 稳定 vs 动态分离
-
-```
-STABLE_SYSTEM_PROMPT（固定模板）
-    ├── System：角色定义
-    ├── Doing tasks：行为规范
-    ├── Using your tools：工具使用指南
-    └── Output efficiency：效率要求
-─────────────────────────────────
-__NANO_CODE_SYSTEM_PROMPT_DYNAMIC_BOUNDARY__
-─────────────────────────────────
-启动上下文（仅首次）：日期 + 平台 + Shell + CLAUDE.md + Git
-动态附件（按需）：Skill 列表、Deferred Tools、MCP Delta
-记忆注入（每次）：LLM 精选的最相关记忆 + freshness warning
-```
-
-所有动态内容通过 `append_user_context()` 以 user message 形式注入——不改 system prompt。系统的 "stable boundary" 之后的变化不影响 cache 命中。
-
-### 2.2 CLAUDE.md 加载链
-
-优先级从低到高：`~/.claude/CLAUDE.md`（用户全局）→各目录 `CLAUDE.md`→`.claude/CLAUDE.md`→`.claude/rules/*.md`→`CLAUDE.local.md`（本地覆盖）。支持 `@path/to/file.md` include 语法，深度 5 层，总预算 60K 字符，单文件 20K。HTML 注释剥离（代码块内保留）。
-
-### 2.3 Git 快照
-
-启动时用 `ThreadPoolExecutor` 并行 5 个 git 命令（branch、remote_head、status、log、user），3s 超时。一次性快照——不随对话更新。为什么？对话中代码不断变化，实时更新导致消息历史中出现多个矛盾版本。快照标注"对话开始时拍的"。
-
-## 3. 总体设计
+## 2. 文件结构
 
 ```
-context/
-├── builder.py    # 稳定 system prompt + 启动上下文 + 5 个 render_* 附件函数
-└── sources.py    # CLAUDE.md 加载 + Git 快照 + frontmatter 解析
-                  # 含共享类型（PromptDiagnostic、PromptBundle）——避免循环导入
+agent/harness/context/
+├── __init__.py
+├── builder.py    # stable system prompt、startup context、动态附件 render
+└── sources.py    # CLAUDE.md、Git 快照、frontmatter
+
+agent/harness/
+├── compressor.py
+└── message_view.py
 ```
 
-## 4. 详细设计
+`message_view.py` 提供双消息格式的读写视图，避免 compressor 到处手写 Anthropic/OpenAI 分支。
 
-**`builder.py`**：`STABLE_SYSTEM_PROMPT` 字符串常量——四个 section，约 120 行。`build_startup_context()` 生成首次注入的 `<system-reminder>` 块。5 个 `render_*` 函数：skill_listing（只列 metadata，不注入正文）、deferred_tools（可被 tool_search 激活的工具名列表）、mcp_delta（added/changed/removed 通知）、memory_attachment、system_reminder（通用包裹函数）。
+## 3. 稳定 vs 动态
 
-**`sources.py`**：`load_project_instructions()` 扫描 CLAUDE.md 文件链——按优先级排序、HTML 剥离、include 解析、总预算限制。`collect_git_context()` 并行 git 命令。`parse_frontmatter()` 解析 `---` 分隔的 YAML 元数据——被 memory、skills、subagents、CLAUDE.md loader 共用。
+```
+stable system prompt
+  角色、行为规范、工具使用原则、输出要求
 
-**共享类型**：`PromptDiagnostic`（info/warning/error）、`PromptBundle`（system_prompt+startup_context+diagnostics）、`ContextAttachment`、`FrontmatterResult`。放在 `sources.py` 而非 `builder.py`——因为 `builder.py` 需要 import `sources.py`（调用 load_project_instructions、collect_git_context），反过来 sources 不需要 import builder。避免循环导入。
+startup context
+  日期、平台、shell、CLAUDE.md、Git 快照
 
-## 5. 设计决策
+dynamic attachments
+  skill 列表、deferred tools、MCP delta、memory
+```
 
-### 为什么稳定提示词和动态附件分离
+动态内容通过 user context 注入，不频繁修改 stable system prompt。这样更利于 prompt cache 命中，也让“长期规则”和“本轮状态”边界清楚。
 
-Anthropic 的 prompt caching 基于前缀匹配。只要 system prompt 不变，cache 就命中。所有动态内容放 `DYNAMIC_BOUNDARY` 之后，随意改不影响 cache。
+## 4. CLAUDE.md 和 Git 快照
 
-### 为什么 Git 是一次性快照
+`sources.py` 负责：
 
-对话中代码被不断修改——多个 Git status 版本会互相矛盾。一次性快照标注"对话开始时拍的"。
+- 加载用户级和项目级 `CLAUDE.md`。
+- 解析 `.claude/rules/*.md`、`CLAUDE.local.md`。
+- 处理 `@path/to/file.md` include，限制递归深度。
+- 剥离 HTML 注释。
+- 收集 Git branch、status、log、user 等启动快照。
 
-### 为什么共享类型放 sources.py
+Git 快照是会话启动时的一次性信息。对话中代码会变化，实时刷新会让历史里出现多个互相矛盾的状态。
 
-`builder → sources` 是单向依赖（builder 调 sources 的函数）。如果把类型放 builder，sources 需要反向 import builder——循环。放 sources 打破循环。
+## 5. 五层压缩
 
-## 6. 面试考点
+```
+Layer 0  Persist        单个工具结果过大时落盘
+Layer 1  Snip           利用率较高时去掉旧的可重读工具结果
+Layer 2  Microcompact   空闲一段时间后清理旧工具结果
+Layer 3  Collapse       摘要早期 70% 消息，保留最近 30% 原文
+Layer 4  Compact        全量摘要，最后兜底
+```
 
-**Q: 改什么内容不会让 Anthropic prompt cache 失效？** `DYNAMIC_BOUNDARY` 之后的变化都不影响。改 CLAUDE.md、调整附件时机——都安全。改 `STABLE_SYSTEM_PROMPT` 任何文字都 miss。
+### Layer 0: Persist
 
-**Q: CLAUDE.md include 怎么防止无限递归？** 深度限制 5 层。`stack: list[Path]` 追踪当前 include 链——检测到循环就跳过并记录 diagnostic。
+位置：`cli/core/tools/runtime.py`
 
-**Q: 为什么共享类型放 sources.py？** 避免 builder→sources 循环导入。builder 需要 sources 的函数（load_project_instructions、collect_git_context），sources 不需要 builder。类型放 sources 打破可能的循环。
+触发：工具返回结果超过阈值。
 
-## 7. 代码导读
+行为：完整结果写入：
 
-**关键行号**：`builder.py` STABLE_SYSTEM_PROMPT 常量、`builder.py` build_startup_context()、`sources.py` load_project_instructions() 文件发现链、`sources.py` collect_git_context() ThreadPoolExecutor 并行。
+```
+{workspace}/.nanocode/sessions/{session_id}/tool-results/{call_id}.txt
+```
+
+消息历史只保留 `<persisted-output>` 和约 2KB 预览。
+
+### Layer 1: Snip
+
+位置：`agent/harness/compressor.py`
+
+触发：上下文利用率超过阈值。
+
+行为：对可重读的工具结果做去重和保留最近项，旧结果替换为提示文本。可重读工具包括 read、grep、list、shell、web_fetch、write、edit 等。
+
+### Layer 2: Microcompact
+
+位置：`agent/harness/compressor.py`
+
+触发：距离上次 API 调用超过空闲阈值。
+
+行为：保留最近少量工具结果，旧结果替换为 `[Old result cleared]`。
+
+### Layer 3: Collapse
+
+位置：`agent/harness/compressor.py`
+
+触发：上下文利用率很高且消息数量足够。
+
+行为：调用模型总结前 70% 消息，保留后 30% 原文。它比 Compact 破坏性更低，成功后通常不需要 Compact。
+
+### Layer 4: Compact
+
+位置：`agent/harness/compressor.py`
+
+触发：对话开始时检查到利用率超过阈值，或用户手动 `/compact`。
+
+行为：全量摘要消息历史，随后恢复最近文件上下文和 active skills。连续失败会熔断，避免无限重试。
+
+## 6. Compressor 如何避免依赖 provider
+
+Compressor 需要调用模型做摘要，但它不创建 backend，不 import `providers/`。`AgentSession` 注入：
+
+```python
+Compressor(
+    agent,
+    summarize_messages=self._summarize_messages,
+    notify=self._notify,
+)
+```
+
+这样 harness 仍然只依赖 agent core。
+
+## 7. 设计决策
+
+### 为什么 Collapse 和 Compact 共用摘要引擎
+
+两者都是“把消息列表变成结构化摘要”。区别只是输入范围：Collapse 输入早期消息，Compact 输入全部消息。共用引擎减少 prompt 和调用逻辑重复。
+
+### 为什么 Persist 在 ToolRuntime
+
+Persist 是工具结果返回后的即时处理，必须发生在结果进入消息历史之前。ToolRuntime 是唯一能统一拦截所有工具结果的地方。
+
+### 为什么动态附件不用 system prompt
+
+system prompt 变化会影响缓存，也会混淆稳定规则和当前状态。动态信息作为 user context 注入，更清晰也更可控。
+
+## 8. 代码导读
+
+```
+agent/harness/context/builder.py
+agent/harness/context/sources.py
+agent/harness/message_view.py
+agent/harness/compressor.py
+cli/core/tools/runtime.py::_persist_large_result
+cli/session.py::_summarize_messages
+```

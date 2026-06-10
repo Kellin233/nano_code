@@ -1,46 +1,94 @@
 # 测试指南
 
-## 1. 为什么需要测试
+## 1. 当前状态
 
-重构 55 个源文件、改 7 个能力模块——没有测试就是瞎改。策略：单元测试不依赖外部服务（API、MCP、sandbox），集成测试用 FakeBackend 和 FakeSandbox 模拟。
+测试仍放在历史目录名下：
 
-## 2. 核心概念
+```
+test/runtime/
+test/backend/
+test/capabilities/
+test/context/
+test/cli/
+test/tui/
+```
 
-### 2.1 测试目录 → 源码目录 一一对应
+这些目录名不完全等于当前源码包名，但测试 import 已迁移到新架构路径，例如：
 
-`test/runtime/`→Agent+Loop+Compressor | `test/backend/`→Backend | `test/cli/`→CLI 参数 | `test/context/`→提示词 | `test/capabilities/`→7 个能力模块 | `test/tui/`→TUI。
+- `nanocode.agent.*`
+- `nanocode.agent.harness.*`
+- `nanocode.providers.*`
+- `nanocode.cli.core.*`
+- `nanocode.cli.session`
 
-### 2.2 测试分层
+后续可以重命名测试目录，但这不是运行正确性的前置条件。
 
-**单元测试**：不依赖 API/文件系统/外部服务。测试 Agent 状态操作、ToolRegistry 注册查找、Compressor 压缩逻辑。Mock 和 Fake 替代真实依赖。
+## 2. 推荐命令
 
-**集成测试**：需要临时文件或 FakeBackend。测试 AgentLoop 完整流程、ToolRuntime 执行管线、Hooks 交互。
-
-### 2.3 Mock 策略
-
-**FakeBackend**：返回预设 BackendResponse，验证调用次数和参数。**FakeSandbox**：记录 shell 命令调用，返回预设输出。**patch Agent.run_once**：模拟子 Agent 返回。
-
-内部组件用真实实例，只 mock 外部依赖。过度 mock 会让测试只验证"mock 被调用了"而非"系统行为正确"。
-
-## 3. 常见失败
-
-| 失败 | 原因 |
-|------|------|
-| `ModuleNotFoundError: .tools.base` | 旧 import——base 已合并到 types |
-| `TypeError: Agent() got unexpected keyword` | 旧构造器——改 RuntimeConfig |
-| `grep_search` 返回 "No matches" | 系统 grep 环境问题 |
-
-## 4. 新增测试 Checklist
-
-改了什么文件→对应 test 目录加 `test_*.py`。加工具→`test/capabilities/test_tools.py`。加 CLI 参数→`test/cli/test_args.py`。改 Agent→`test/runtime/test_agent.py`。
-
-## 5. 面试考点
-
-**Q: 为什么不 mock 所有东西？** 只 mock 外部依赖。内部组件用真实实例——测试真实交互。过度 mock→测试只验证 mock 调用，不验证行为。
-
-## 6. 代码导读
+项目使用 pytest：
 
 ```bash
-python3 -m unittest discover -s test -v          # 全部测试
-python3 -m unittest discover -s test/runtime -v  # 特定模块
+python -m pytest -q
 ```
+
+在本项目当前环境中建议使用：
+
+```bash
+/root/miniconda3/envs/medicalgpt/bin/python -m pytest -q
+```
+
+编译检查：
+
+```bash
+/root/miniconda3/envs/medicalgpt/bin/python -m compileall -q src
+```
+
+安装和入口 smoke：
+
+```bash
+/root/miniconda3/envs/medicalgpt/bin/python -m pip install -e . --no-deps
+/root/miniconda3/envs/medicalgpt/bin/nanocode --help
+```
+
+## 3. 测试分层
+
+| 层 | 测什么 |
+|----|--------|
+| Agent core | Agent 状态、消息格式、预算、AgentLoop 状态机、RuntimeEvent |
+| Harness | Compressor、context builder、hooks、permissions、session store |
+| Providers | BackendResponse、流式解析、schema 转换、thinking mode |
+| cli/core | tools、sandbox、skills、memory、MCP、subagents、extensions |
+| CLI/TUI/Server | 参数解析、REPL 命令、事件渲染、protocol |
+
+## 4. Mock 策略
+
+- 用 FakeBackend 代替真实 API。
+- 用 FakeSandbox 代替真实 shell 隔离。
+- 用临时目录隔离文件读写。
+- 测 AgentLoop 时注入 fake `execute_tools`，不要让 core 测试依赖 ToolRuntime。
+- 测 ToolRuntime 时构造最小 `ToolContext`，不要创建完整 TUI。
+
+原则是只 mock 外部依赖，内部组件尽量用真实对象组合。
+
+## 5. 架构边界测试
+
+建议保留类似检查：
+
+```bash
+rg -n "from .*cli|from .*tui|from .*providers|import anthropic|import openai|open\(" \
+  src/agent/agent.py src/agent/loop.py src/agent/events.py src/agent/types.py src/agent/models.py src/agent/budget.py
+
+rg -n "from .*cli|from .*tui|from .*providers" src/agent/harness -g '*.py'
+```
+
+第一条用于确保 Agent core 没有反向依赖或 SDK import。第二条用于确保 harness 不依赖表现层和 provider。
+
+## 6. 新增测试 Checklist
+
+- 改 `agent/`：优先补 `test/runtime` 中 Agent/Loop 相关测试。
+- 改 `agent/harness/context`：补 `test/context`。
+- 改 `agent/harness/permissions/hooks/compressor`：补对应 runtime/capabilities 历史目录测试。
+- 改 `providers/`：补 `test/backend`。
+- 改 `cli/core/tools`：补 `test/capabilities/test_tools*`。
+- 改 `cli/session.py`：补集成测试，验证装配和回调桥接。
+- 改 `cli/core/extensions`：补注册工具、事件订阅、错误隔离测试。

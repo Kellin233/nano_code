@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ..runtime import RuntimeThread
+    from ..cli.thread import RuntimeThread
     from .commands import CommandRegistry
     from .input import TuiInput
     from .renderer import TuiRenderer

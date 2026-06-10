@@ -18,5 +18,9 @@ dist/
 .github/
 remake/
 test/
+benchmarks/API.txt
+benchmarks/swebench/repos/
+benchmarks/swebench/result/
+benchmarks/terminal-bench/result/
 CLAUDE.md
 AGENTS.md

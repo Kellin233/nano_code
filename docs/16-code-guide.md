@@ -2,34 +2,76 @@
 
 ## 1. 推荐阅读顺序
 
-跟着一条请求：`cli/main.py`（入口+组装）→`runtime/agent.py`（状态）→`runtime/loop.py`（循环）→`backend/anthropic.py`（模型调用）→`capabilities/tools/`（工具）→`runtime/compressor.py`（压缩）→`context/builder.py`（提示词）。读 7 个文件理解 80% 核心流程。
+跟一条请求从入口走到工具执行：
+
+```
+1. cli/main.py
+2. cli/session.py
+3. agent/agent.py
+4. agent/loop.py
+5. providers/anthropic.py
+6. cli/core/tools/runtime.py
+7. agent/harness/compressor.py
+8. agent/harness/context/builder.py
+```
+
+只读 3 个文件理解主路径：
+
+```
+cli/session.py
+agent/loop.py
+cli/core/tools/runtime.py
+```
 
 ## 2. 关键文件
 
-| 文件 | 行数 | 为什么重要 |
-|------|:--:|------|
-| runtime/agent.py | ~590 | 最大文件，Agent 全部状态+消息操作 |
-| runtime/loop.py | ~326 | 主循环，后端无关核心逻辑 |
-| runtime/compressor.py | ~264 | 三层压缩+compact |
-| backend/anthropic.py | ~160 | Anthropic 流式解析 |
-| capabilities/tools/builtin.py | ~440 | 12 个内置工具 schema+实现 |
-| capabilities/tools/runtime.py | ~250 | 工具执行管线 |
-| capabilities/tools/registry.py | ~330 | ToolRegistry 注册/激活 |
-| context/sources.py | ~320 | CLAUDE.md 加载链 |
+| 文件 | 为什么重要 |
+|------|------------|
+| `cli/session.py` | 唯一装配点，连接 Agent、Backend、ToolRuntime、Memory、MCP、Hooks、Extensions |
+| `agent/agent.py` | Agent 状态容器、消息历史、预算、回调槽位 |
+| `agent/loop.py` | LLM/tool 循环，只依赖注入回调 |
+| `agent/types.py` | core 协议类型：ToolCall、ToolResult、RuntimeEvent |
+| `providers/base.py` | Backend 抽象和统一返回结构 |
+| `providers/anthropic.py` | Anthropic 流式解析和 tool_use 转换 |
+| `providers/openai.py` | OpenAI-compatible 流式解析和 function call 转换 |
+| `cli/core/tools/runtime.py` | 工具执行管线 |
+| `cli/core/tools/registry.py` | ToolRegistry、deferred、MCP/extension 工具注册 |
+| `agent/harness/compressor.py` | 五层上下文压缩 |
+| `agent/harness/context/sources.py` | CLAUDE.md、Git 快照、frontmatter |
+| `cli/core/extensions/runner.py` | Extension 事件分发和错误隔离 |
 
-## 3. 修改路径
+## 3. 常见修改路径
 
-**加工具**：`builtin.py` 加 schema+实现。**加模型厂商**：`models.py` 加元数据+新建 `backend/xxx.py`。**加 CLI 参数**：`cli/args.py` 加参数+映射。**加 capability**：新建 `capabilities/<name>/`+`agent.py` 中实例化。
+| 需求 | 改哪里 |
+|------|--------|
+| 加内置工具 | `cli/core/tools/builtin.py` + 必要时更新 registry/types 测试 |
+| 加扩展工具入口 | `cli/core/extensions/api.py` / `runner.py` |
+| 加模型厂商 | `providers/<name>.py` + `providers/__init__.py` + `agent/models.py` |
+| 改主循环 | `agent/loop.py`，尽量通过注入回调保持 core 纯净 |
+| 改装配关系 | `cli/session.py` |
+| 改权限规则 | `agent/harness/permissions/` |
+| 改 sandbox profile | `cli/core/sandbox/config.py` / `types.py` |
+| 改上下文模板 | `agent/harness/context/builder.py` |
+| 改压缩策略 | `agent/harness/compressor.py` |
+| 改 TUI 命令 | `tui/commands.py` / `tui/app.py` |
+| 改 server protocol | `cli/core/protocol/messages.py` / `cli/core/server/app_server.py` |
 
 ## 4. 设计模式速查
 
 | 模式 | 位置 |
 |------|------|
-| 策略模式 | backend/: AnthropicBackend/OpenAIBackend |
-| 工厂函数 | backend/__init__.py、runtime/events.py |
-| 事件流 | runtime/loop.py: AsyncIterator[RuntimeEvent] |
-| 注册表模式 | capabilities/tools/registry.py: ToolRegistry |
+| 策略模式 | `providers/`: AnthropicBackend / OpenAIBackend |
+| 工厂函数 | `providers/create_backend()`、`agent/events.py` |
+| 注册表模式 | `cli/core/tools/registry.py` |
+| 依赖注入 | `AgentLoop(..., execute_tools=...)` |
+| 回调桥接 | `Agent.set_callbacks()` + `ExtensionRunner` |
+| 事件流 | `AgentLoop.run()` / `RuntimeThread.submit()` |
+| 外观/装配点 | `cli/session.py: AgentSession` |
 
-## 5. 面试考点
+## 5. 不要破坏的边界
 
-**Q: 只读 3 个文件理解项目？** `cli/main.py`（入口）、`runtime/loop.py`（循环）、`capabilities/tools/runtime.py`（工具执行）。覆盖从输入到执行的完整路径。
+- 不要让 `agent/` import `cli/`、`tui/`、`providers/`、SDK 或 `cli/core/`。
+- 不要让 `agent/harness/` import `cli/`、`tui/`、`providers/`。
+- 不要在 `providers/` 中接触 AgentSession 或 TUI。
+- 不要在 `agent/loop.py` 里直接创建 ToolRuntime。
+- 新能力优先放到 `cli/core/`，由 `cli/session.py` 装配。

@@ -1,6 +1,0 @@
-Skipping image OS validation for alexgshaw/gpt2-codegolf:20251031: docker inspect returned 1
-Trial gpt2-codegolf__PuupeZY failed: Docker compose command failed for environment gpt2-codegolf. Command: docker compose --project-name gpt2-codegolf__puupezy --project-directory /root/.cache/harbor/tasks/CGqXnFmcaVcQCTbCZMpg2T/gpt2-codegolf/environment -f /tmp/tmp4h86f3wa/gpt2-codegolf__PuupeZY-docker-compose-resources.json -f /root/miniconda3/envs/terminalbench/lib/python3.12/site-packages/harbor/environments/docker/docker-compose-prebuilt.yaml -f /tmp/tmpbpowhtr_/docker-compose-mounts.json up --detach --wait. Return code: 1. Stdout:  main Pulling 
- main Error Get "https://registry-1.docker.io/v2/": context deadline exceeded
-Error response from daemon: Get "https://registry-1.docker.io/v2/": context deadline exceeded
-. Stderr: None. 
-Not retrying trial because the maximum number of retries has been reached

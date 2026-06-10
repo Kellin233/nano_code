@@ -9,7 +9,7 @@ import time
 from contextlib import suppress
 from pathlib import Path
 
-from ..capabilities.skills import get_skill_by_name
+from ..cli.core.skills import get_skill_by_name
 from .commands import CommandRegistry, default_commands
 from .input import TuiInput
 from .renderer import TuiRenderer, set_renderer
@@ -159,7 +159,7 @@ class TuiApp:
                 command_names.append(alias)
                 descriptions[f"/{alias}"] = f"alias for /{command.name}"
         try:
-            from ..capabilities.skills import discover_skills
+            from ..cli.core.skills import discover_skills
 
             discovered = [skill for skill in discover_skills() if skill.user_invocable]
             skills = [skill.name for skill in discovered]

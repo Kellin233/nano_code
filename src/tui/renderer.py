@@ -138,17 +138,33 @@ class TuiRenderer:
             self._assistant_active = False
             return None
 
-    def cost(self, input_tokens: int, output_tokens: int) -> None:
+    def cost(
+        self,
+        input_tokens: int,
+        output_tokens: int,
+        *,
+        model: str = "",
+        input_cache_hit_tokens: int = 0,
+        input_cache_miss_tokens: int = 0,
+    ) -> None:
         with self._transcript_output():
             if self._assistant_active:
                 self.console.print()
             self._assistant_active = False
-            cost_in = (input_tokens / 1_000_000) * 3
-            cost_out = (output_tokens / 1_000_000) * 15
+            from ..agent.budget import estimate_model_cost_usd, pricing_for_model
+
+            cost = estimate_model_cost_usd(
+                model,
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                input_cache_hit_tokens=input_cache_hit_tokens,
+                input_cache_miss_tokens=input_cache_miss_tokens,
+            )
+            pricing = pricing_for_model(model)
             self.console.print()
             self.console.print(
                 f"[dim]Tokens: {input_tokens} in / {output_tokens} out "
-                f"(~${cost_in + cost_out:.4f})[/dim]"
+                f"(~${cost:.4f}, {pricing.label})[/dim]"
             )
 
     def retry(self, attempt: int, max_retries: int, reason: str) -> None:
