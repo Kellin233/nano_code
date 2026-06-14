@@ -7,14 +7,24 @@
 from __future__ import annotations
 
 import json
-import asyncio
-import time
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import openai
 
-from ..agent.types import MAX_RETRIES, MAX_RETRY_DELAY_MS, ToolCall, ToolDef
+from ..agent.models import (
+    model_supports_adaptive_thinking,
+    model_supports_thinking,
+    to_openai_tools,
+    with_retry,
+)
+from ..agent.types import (
+    ConversationHistory,
+    ToolCall,
+    ToolResultBlock,
+    ToolUseBlock,
+    message_text,
+)
 from .base import Backend, BackendResponse, TokenUsage
 
 
@@ -32,51 +42,47 @@ def _usage_value(usage, *names: str) -> int:
     return 0
 
 
-def _model_supports_thinking(model: str) -> bool:
-    m = model.lower()
-    if "claude-3-" in m or "3-5-" in m or "3-7-" in m:
-        return False
-    return "claude" in m and any(x in m for x in ("opus", "sonnet", "haiku"))
+def to_openai_messages(conversation: ConversationHistory, system: str = "") -> list[dict]:
+    messages: list[dict] = []
+    if system:
+        messages.append({"role": "system", "content": system})
 
+    for message in conversation:
+        if message.role == "user":
+            messages.append({"role": "user", "content": message_text(message)})
+            continue
 
-def _model_supports_adaptive_thinking(model: str) -> bool:
-    m = model.lower()
-    return "opus-4-6" in m or "sonnet-4-6" in m
+        if message.role == "assistant":
+            tool_calls = [
+                {
+                    "id": block.id,
+                    "type": "function",
+                    "function": {
+                        "name": block.name,
+                        "arguments": json.dumps(block.input, ensure_ascii=False),
+                    },
+                }
+                for block in message.content
+                if isinstance(block, ToolUseBlock)
+            ]
+            text = message_text(message)
+            if not text and not tool_calls:
+                continue
+            payload: dict[str, Any] = {"role": "assistant", "content": text or None}
+            if tool_calls:
+                payload["tool_calls"] = tool_calls
+            messages.append(payload)
+            continue
 
+        for block in message.content:
+            if isinstance(block, ToolResultBlock):
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": block.tool_use_id,
+                    "content": block.content,
+                })
 
-def _to_openai_tools(tools: list[ToolDef]) -> list[dict]:
-    return [
-        {
-            "type": "function",
-            "function": {
-                "name": t["name"],
-                "description": t["description"],
-                "parameters": t["input_schema"],
-            },
-        }
-        for t in tools
-    ]
-
-
-def _is_retryable(error: Exception) -> bool:
-    msg = str(error)
-    if "model_not_found" in msg or "No available channel" in msg:
-        return False
-    status = getattr(error, "status_code", None) or getattr(error, "status", None)
-    if status in (429, 503, 529):
-        return True
-    return "overloaded" in msg or "ECONNRESET" in msg or "ETIMEDOUT" in msg
-
-
-async def _with_retry(fn, max_retries: int = MAX_RETRIES) -> Any:
-    for attempt in range(max_retries + 1):
-        try:
-            return await fn()
-        except Exception as error:
-            if attempt >= max_retries or not _is_retryable(error):
-                raise
-            delay = min(1000 * (2 ** attempt), MAX_RETRY_DELAY_MS) / 1000 + (hash(str(time.time())) % 1000) / 1000
-            await asyncio.sleep(delay)
+    return messages
 
 
 class OpenAIBackend(Backend):
@@ -91,15 +97,15 @@ class OpenAIBackend(Backend):
         self.model = model
 
     def supports_thinking(self, model: str) -> bool:
-        return _model_supports_thinking(model)
+        return model_supports_thinking(model)
 
     def supports_adaptive_thinking(self, model: str) -> bool:
-        return _model_supports_adaptive_thinking(model)
+        return model_supports_adaptive_thinking(model)
 
     async def call(
         self,
         *,
-        messages: list[dict],
+        conversation: ConversationHistory,
         system: str,
         tools: list[dict],
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
@@ -110,8 +116,8 @@ class OpenAIBackend(Backend):
         async def _do():
             stream = await self.client.chat.completions.create(
                 model=self.model,
-                tools=_to_openai_tools(tools),
-                messages=messages,
+                tools=to_openai_tools(tools),
+                messages=to_openai_messages(conversation, system),
                 stream=True,
                 stream_options={"include_usage": True},
             )
@@ -182,4 +188,4 @@ class OpenAIBackend(Backend):
                 ),
             )
 
-        return cast(BackendResponse, await _with_retry(_do))
+        return cast(BackendResponse, await with_retry(_do))

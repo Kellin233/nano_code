@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 ApprovalStatus = Literal["approved", "denied"]
-ConfirmFn = Callable[[str], Awaitable[bool]]
+ConfirmFn = Callable[..., Awaitable[bool]]
 
 
 @dataclass(frozen=True)
@@ -17,6 +17,8 @@ class ApprovalRequest:
     id: str
     message: str
     call_id: str | None = None
+    tool_name: str | None = None
+    requires_explicit_confirmation: bool = False
 
 
 @dataclass(frozen=True)
@@ -35,20 +37,25 @@ class ApprovalManager:
         self._pending: dict[str, asyncio.Future[ApprovalDecision]] = {}
         self._remembered: set[str] = set()
 
-    def is_remembered(self, message: str) -> bool:
-        return message in self._remembered
-
     async def request(
         self,
         message: str,
         *,
         call_id: str | None = None,
+        tool_name: str | None = None,
+        requires_explicit_confirmation: bool = False,
         confirm_fn: ConfirmFn | None = None,
         on_request: Callable[[ApprovalRequest], None] | None = None,
     ) -> ApprovalDecision:
         if message in self._remembered:
             return ApprovalDecision(request_id="remembered", status="approved", remember=True)
-        request = ApprovalRequest(id=uuid.uuid4().hex, message=message, call_id=call_id)
+        request = ApprovalRequest(
+            id=uuid.uuid4().hex,
+            message=message,
+            call_id=call_id,
+            tool_name=tool_name,
+            requires_explicit_confirmation=requires_explicit_confirmation,
+        )
         loop = asyncio.get_running_loop()
         future: asyncio.Future[ApprovalDecision] = loop.create_future()
         self._pending[request.id] = future
@@ -79,6 +86,3 @@ class ApprovalManager:
             if not future.done():
                 future.set_result(ApprovalDecision(request_id, "denied"))
         self._pending.clear()
-
-    def pending_ids(self) -> list[str]:
-        return list(self._pending)

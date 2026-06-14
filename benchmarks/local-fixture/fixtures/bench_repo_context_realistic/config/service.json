@@ -1,0 +1,7 @@
+{
+  "service": "checkout",
+  "mode": "release-candidate",
+  "retry_guard": true,
+  "rollout_ring": "canary-20",
+  "rollback_signal": "duplicate_payment_commit_total > 0"
+}

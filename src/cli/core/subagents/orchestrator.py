@@ -9,14 +9,32 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
+from ...config import RuntimeConfig
 from ...logging_config import get_logger
-from ....agent.agent import RuntimeConfig
 
 logger = get_logger("subagents.orchestrator")
 
 DEFAULT_TIMEOUT = 60.0
 DEFAULT_MAX_TURNS = 20
 DEFAULT_MAX_CONCURRENCY = 4
+
+
+def _normalise_allowed_tools(value: Any) -> set[str] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return {part.strip() for part in value.split(",") if part.strip()}
+    if isinstance(value, (list, tuple, set)):
+        return {str(part).strip() for part in value if str(part).strip()}
+    return None
+
+
+def _intersect_allowed_tools(left: set[str] | None, right: set[str] | None) -> set[str] | None:
+    if left is None:
+        return right
+    if right is None:
+        return left
+    return left & right
 
 
 class SubAgentOrchestrator:
@@ -60,6 +78,11 @@ class SubAgentOrchestrator:
 
         # 获取子 Agent 配置（工具白名单 + system prompt）
         sub_config = get_sub_agent_config(agent_type)
+        task_allowed_tools = _normalise_allowed_tools(task.get("allowed_tools"))
+        runtime_allowed_tools = _intersect_allowed_tools(
+            self.parent.config.allowed_tools,
+            task_allowed_tools,
+        )
 
         # 创建子 AgentSession，复用父会话的 sandbox manager。
         runtime_config = RuntimeConfig(
@@ -73,7 +96,8 @@ class SubAgentOrchestrator:
             custom_system_prompt=sub_config["system_prompt"],
             max_turns=max_turns,
             sandbox_config=self.parent.config.sandbox_config,
-            workspace=self.parent.config.workspace,
+            allowed_tools=runtime_allowed_tools,
+            workspace=self.parent.workspace,
         )
         from ...session import create_session
 

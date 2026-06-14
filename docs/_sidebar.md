@@ -26,7 +26,7 @@
   * UserPromptSubmit、PreToolUse、PostToolUse、Stop、PreCompact
 
 * [9. 记忆系统](09-memory.md)
-  * 文件式存储、本地匹配+LLM 精选、MemoryRuntime
+  * Markdown topic、MEMORY.md 索引、启动注入、显式 /remember
 
 * [10. MCP 集成](10-mcp.md)
   * stdio transport、工具注册、资源操作

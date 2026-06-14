@@ -7,10 +7,9 @@ import uuid
 from collections.abc import AsyncIterator
 
 from ..agent.events import RuntimeEvent, TurnResult
-from ..agent.harness.approvals import ApprovalManager, ConfirmFn
-from ..agent.harness.session import ArtifactStore, SessionEventStore
-from ..agent.agent import RuntimeConfig
+from ..agent.harness.approvals import ApprovalManager, ApprovalRequest, ConfirmFn
 from ..tui.renderer import get_renderer
+from .config import RuntimeConfig
 from .session import create_session
 
 
@@ -20,19 +19,15 @@ class RuntimeThread:
         config: RuntimeConfig,
         *,
         thread_id: str | None = None,
-        event_store: SessionEventStore | None = None,
-        artifact_store: ArtifactStore | None = None,
     ):
         self.config = config
         self.thread_id = thread_id or uuid.uuid4().hex[:8]
-        self.event_store = event_store or SessionEventStore(self.thread_id)
-        self.artifacts = artifact_store or ArtifactStore(self.thread_id)
         self.session = create_session(config, thread_id=self.thread_id, render_events=False)
         self.approvals = ApprovalManager()
         self._confirm_fn: ConfirmFn | None = None
         self._current_task: asyncio.Task | None = None
-        self._seq = self.event_store.next_seq()
-        self.session.set_confirm_fn(self._confirm)
+        self._event_queue: asyncio.Queue[RuntimeEvent | object] | None = None
+        self.session.set_confirm_fn(self._confirm, emits_approval_events=True)
 
     @property
     def model(self) -> str:
@@ -53,11 +48,11 @@ class RuntimeThread:
 
     async def submit(self, prompt: str) -> AsyncIterator[RuntimeEvent]:
         user_event = self._make_event("user.input", {"text": prompt})
-        self.event_store.append(user_event)
         yield user_event
 
         sentinel = object()
         runtime_events: asyncio.Queue[RuntimeEvent | object] = asyncio.Queue()
+        self._event_queue = runtime_events
 
         async def produce() -> None:
             try:
@@ -79,12 +74,13 @@ class RuntimeThread:
                 if item is sentinel:
                     break
                 assert isinstance(item, RuntimeEvent)
-                self.event_store.append(item)
                 yield item
         finally:
             if not producer.done():
                 producer.cancel()
             await asyncio.gather(producer, return_exceptions=True)
+            if self._event_queue is runtime_events:
+                self._event_queue = None
             self._current_task = None
 
     async def chat(self, prompt: str) -> TurnResult:
@@ -108,18 +104,28 @@ class RuntimeThread:
 
     async def compact(self) -> None:
         await self.session.compact()
-        event = self._make_event("context.compacted", {"reason": "manual"})
-        self.event_store.append(event)
 
     def clear_history(self) -> None:
         self.session.clear_history()
-        self.event_store.append(self._make_event("thread.cleared"))
 
     def show_cost(self) -> None:
         self.session.show_cost()
 
-    def restore_session(self, data: dict) -> None:
-        self.session.restore_session(data)
+    def remember_memory(self, topic: str, text: str) -> str:
+        return self.session.remember_memory(topic, text)
+
+    def memory_path(self) -> str:
+        return self.session.memory_path()
+
+    def memory_summary(self) -> str:
+        return self.session.memory_summary()
+
+    def show_memory_topic(self, topic: str) -> str:
+        return self.session.show_memory_topic(topic)
+
+    def restore_from_persistence(self) -> bool:
+        self.session.restore_from_persistence()
+        return self.session.agent.conversation.count() > 0
 
     async def shutdown(self) -> None:
         await self.session.shutdown()
@@ -127,10 +133,41 @@ class RuntimeThread:
     def _make_event(self, event_type: str, payload: dict | None = None) -> RuntimeEvent:
         return RuntimeEvent(type=event_type, payload=payload or {})
 
-    async def _confirm(self, message: str) -> bool:
-        if self._confirm_fn is None:
+    async def _confirm(
+        self,
+        message: str,
+        *,
+        call_id: str | None = None,
+        tool_name: str | None = None,
+        requires_explicit_confirmation: bool = False,
+    ) -> bool:
+        if self._confirm_fn is None and self._event_queue is None:
             return False
-        decision = await self.approvals.request(message, confirm_fn=self._confirm_fn)
+
+        def on_request(request: ApprovalRequest) -> None:
+            queue = self._event_queue
+            if queue is None:
+                return
+            queue.put_nowait(self._make_event(
+                "approval.requested",
+                {
+                    "thread_id": self.thread_id,
+                    "request_id": request.id,
+                    "call_id": request.call_id,
+                    "tool_name": request.tool_name,
+                    "message": request.message,
+                    "requires_explicit_confirmation": request.requires_explicit_confirmation,
+                },
+            ))
+
+        decision = await self.approvals.request(
+            message,
+            call_id=call_id,
+            tool_name=tool_name,
+            requires_explicit_confirmation=requires_explicit_confirmation,
+            confirm_fn=self._confirm_fn,
+            on_request=on_request,
+        )
         return decision.approved
 
     def _render_event(self, event: RuntimeEvent) -> None:

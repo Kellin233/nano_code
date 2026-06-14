@@ -10,37 +10,38 @@ from __future__ import annotations
 import time
 import uuid
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from dataclasses import dataclass
+from typing import Literal
 
 from .budget import estimate_model_cost_usd, pricing_for_model
 from .models import get_context_window
-from .types import CONTEXT_WINDOW_MARGIN, RuntimeEvent, ToolCall, ToolDef, ToolResult
+from .types import (
+    CONTEXT_WINDOW_MARGIN,
+    ConversationHistory,
+    ConversationMessage,
+    RuntimeEvent,
+    TextBlock,
+    ToolCall,
+    ToolDef,
+    ToolResult,
+    ToolUseBlock,
+)
 
 
 @dataclass
-class RuntimeConfig:
+class AgentConfig:
     model: str = "claude-opus-4-6"
-    provider: str = "anthropic"
-    api_base: str | None = None
-    anthropic_base_url: str | None = None
-    api_key: str | None = None
+    message_format: Literal["anthropic", "openai"] = "anthropic"
     thinking: bool = False
-    permission_mode: str = "default"
     max_cost_usd: float | None = None
     max_turns: int | None = None
-    custom_system_prompt: str | None = None
-    is_sub_agent: bool = False
-    sandbox_config: Any | None = None
-    workspace: Path = field(default_factory=Path.cwd)
+    context_window: int | None = None
 
     @property
     def use_openai(self) -> bool:
-        return self.provider == "openai"
+        return self.message_format == "openai"
 
 
-ConfirmFn = Callable[[str], Awaitable[bool]]
 RuntimeCallback = Callable[[RuntimeEvent], Awaitable[None] | None]
 
 
@@ -49,7 +50,7 @@ class Agent:
 
     def __init__(
         self,
-        config: RuntimeConfig,
+        config: AgentConfig,
         *,
         system_prompt: str | None = None,
         startup_context: str = "",
@@ -57,11 +58,10 @@ class Agent:
     ):
         self.config = config
         self.model = config.model
-        self.permission_mode = config.permission_mode
+        self.message_format = config.message_format
         self.thinking = config.thinking
         self.max_cost_usd = config.max_cost_usd
         self.max_turns = config.max_turns
-        self.is_sub_agent = config.is_sub_agent
 
         self.session_id = session_id or uuid.uuid4().hex[:8]
         self.session_start_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
@@ -77,24 +77,15 @@ class Agent:
         self._consecutive_compact_failures = 0
         self._aborted = False
         self._current_task = None
-        self._confirmed_paths: set[str] = set()
-        self._confirm_fn: ConfirmFn | None = None
 
-        self._read_file_state: dict[str, float] = {}
-        self._tool_results_dir: Path = (
-            Path(self.config.workspace) / ".nanocode" / "sessions" / self.session_id / "tool-results"
-        )
-        self._result_replacements: dict[str, str] = {}
-
-        self._anthropic_messages: list[dict] = []
-        self._openai_messages: list[dict] = []
+        self.conversation = ConversationHistory()
 
         self._pending_context_attachments: list[str] = []
         self._startup_context = startup_context
         self._startup_context_injected = False
         self._initial_context_attachments_prepared = False
 
-        self._system_prompt = system_prompt or config.custom_system_prompt or ""
+        self._system_prompt = system_prompt or ""
 
         self._diagnostics: list[str] = []
 
@@ -110,29 +101,23 @@ class Agent:
         self._ensure_ready_fn: Callable[[], Awaitable[None]] | None = None
         self._shutdown_fn: Callable[[], Awaitable[None]] | None = None
         self._prepare_initial_attachments_fn: Callable[[], None] | None = None
-        self._start_memory_prefetch_fn: Callable[[str], Any] | None = None
-        self._consume_memory_prefetch_fn: Callable[[Any], None] | None = None
 
-        # Application-owned objects. Core stores them opaquely for session/tool
-        # callbacks that share the same Agent instance.
-        self._tool_registry: Any | None = None
-        self._sandbox_manager: Any | None = None
-        self._mcp_manager: Any | None = None
-        self._hook_manager: Any | None = None
-        self._skill_invocation: Any | None = None
-        self._active_skills: Any | None = None
+    @property
+    def use_openai(self) -> bool:
+        return self.message_format == "openai"
 
     @property
     def effective_window(self) -> int:
-        return get_context_window(self.model) - CONTEXT_WINDOW_MARGIN
+        window = self.config.context_window or get_context_window(self.model)
+        return max(1, window - CONTEXT_WINDOW_MARGIN)
 
     @property
     def aborted(self) -> bool:
         return self._aborted
 
     @property
-    def messages(self) -> list[dict]:
-        return self._openai_messages if self.config.use_openai else self._anthropic_messages
+    def messages(self) -> ConversationHistory:
+        return self.conversation
 
     @property
     def system_prompt(self) -> str:
@@ -141,31 +126,15 @@ class Agent:
     def bind_runtime(
         self,
         *,
-        tool_registry: Any | None = None,
-        sandbox_manager: Any | None = None,
-        mcp_manager: Any | None = None,
-        hook_manager: Any | None = None,
-        skill_invocation: Any | None = None,
-        active_skills: Any | None = None,
         tool_definitions: Callable[[], list[ToolDef]] | None = None,
         ensure_ready: Callable[[], Awaitable[None]] | None = None,
         shutdown: Callable[[], Awaitable[None]] | None = None,
         prepare_initial_attachments: Callable[[], None] | None = None,
-        start_memory_prefetch: Callable[[str], Any] | None = None,
-        consume_memory_prefetch: Callable[[Any], None] | None = None,
     ) -> None:
-        self._tool_registry = tool_registry
-        self._sandbox_manager = sandbox_manager
-        self._mcp_manager = mcp_manager
-        self._hook_manager = hook_manager
-        self._skill_invocation = skill_invocation
-        self._active_skills = active_skills
         self._tool_definitions_fn = tool_definitions
         self._ensure_ready_fn = ensure_ready
         self._shutdown_fn = shutdown
         self._prepare_initial_attachments_fn = prepare_initial_attachments
-        self._start_memory_prefetch_fn = start_memory_prefetch
-        self._consume_memory_prefetch_fn = consume_memory_prefetch
 
     def set_callbacks(
         self,
@@ -190,14 +159,6 @@ class Agent:
         result = callback(event)
         if hasattr(result, "__await__"):
             await result  # type: ignore[misc]
-
-    def set_confirm_fn(self, fn: ConfirmFn) -> None:
-        self._confirm_fn = fn
-
-    async def _confirm_dangerous(self, command: str) -> bool:
-        if not self._confirm_fn:
-            return False
-        return await self._confirm_fn(command)
 
     def abort(self) -> None:
         self._aborted = True
@@ -268,65 +229,48 @@ class Agent:
         return {"exceeded": False}
 
     def add_user_message(self, content: str) -> None:
-        if self.config.use_openai:
-            self._openai_messages.append({"role": "user", "content": content})
-        else:
-            self._anthropic_messages.append({"role": "user", "content": content})
+        self.conversation.add_user(content)
 
-    def add_assistant_message(self, content: list[dict]) -> None:
-        if self.config.use_openai:
-            self._openai_messages.append({"role": "assistant", "content": content})
-        else:
-            self._anthropic_messages.append({"role": "assistant", "content": content})
+    def add_assistant_message(self, content: str | list[dict], tool_calls: list[ToolCall] | None = None) -> None:
+        if isinstance(content, str):
+            self.conversation.add_assistant(content, tool_calls)
+            return
 
-    def add_tool_results(self, results: list[dict]) -> None:
-        if self.config.use_openai:
-            self._openai_messages.extend(results)
-        else:
-            self._anthropic_messages.append({"role": "user", "content": results})
+        blocks = []
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                text = str(block.get("text") or "")
+                if text:
+                    blocks.append(TextBlock(text))
+            elif block.get("type") == "tool_use":
+                raw_input = block.get("input")
+                blocks.append(ToolUseBlock(
+                    id=str(block.get("id") or ""),
+                    name=str(block.get("name") or ""),
+                    input=dict(raw_input) if isinstance(raw_input, dict) else {},
+                ))
+        if blocks:
+            self.conversation.messages.append(ConversationMessage(role="assistant", content=blocks))
+
+    def add_tool_results(self, results: list[tuple[ToolCall, ToolResult]]) -> None:
+        self.conversation.add_tool_results(results)
 
     def append_user_context(self, text: str) -> None:
-        if self.config.use_openai:
-            last = self._openai_messages[-1] if self._openai_messages else None
-            if last and last.get("role") == "user":
-                last["content"] = (last.get("content") or "") + "\n\n" + text
-            else:
-                self._openai_messages.append({"role": "user", "content": text})
-        else:
-            last = self._anthropic_messages[-1] if self._anthropic_messages else None
-            if last and last.get("role") == "user":
-                content = last.get("content", "")
-                if isinstance(content, str):
-                    last["content"] = content + "\n\n" + text
-                elif isinstance(content, list):
-                    content.append({"type": "text", "text": text})
-            else:
-                self._anthropic_messages.append({"role": "user", "content": text})
+        self.conversation.append_user_context(text)
 
     def append_meta_user_message(self, text: str) -> None:
-        if not text:
-            return
-        if self.config.use_openai:
-            self._openai_messages.append({"role": "user", "content": text})
-        else:
-            self._anthropic_messages.append({"role": "user", "content": text})
+        self.conversation.append_user_context(text)
 
-    def restore_session(self, data: dict) -> int:
-        if data.get("anthropicMessages"):
-            self._anthropic_messages = data["anthropicMessages"]
-        if data.get("openaiMessages"):
-            self._openai_messages = data["openaiMessages"]
-        if self._anthropic_messages or len(self._openai_messages) > (1 if self.config.use_openai else 0):
+    def restore_conversation(self, conversation: ConversationHistory) -> int:
+        self.conversation = conversation
+        if self.conversation.count():
             self._startup_context_injected = True
-        return len(self._openai_messages) if self.config.use_openai else len(self._anthropic_messages)
+        return self.conversation.count()
 
     def clear_history(self) -> None:
-        self._anthropic_messages = []
-        self._openai_messages = []
-        if self.config.use_openai and self._system_prompt:
-            self._openai_messages.append({"role": "system", "content": self._system_prompt})
-        if self._active_skills is not None:
-            self._active_skills.clear()
+        self.conversation.clear()
         self._startup_context_injected = not bool(self._startup_context)
         self._pending_context_attachments.clear()
         self._initial_context_attachments_prepared = False
@@ -343,27 +287,6 @@ class Agent:
     async def shutdown(self) -> None:
         if self._shutdown_fn is not None:
             await self._shutdown_fn()
-
-    def get_read_file_state(self) -> dict[str, float]:
-        return self._read_file_state
-
-    def get_sandbox_manager(self):
-        return self._sandbox_manager
-
-    def get_mcp_manager(self):
-        return self._mcp_manager
-
-    def get_hook_manager(self):
-        return self._hook_manager
-
-    def get_skill_invocation(self):
-        return self._skill_invocation
-
-    def get_active_skills(self):
-        return self._active_skills
-
-    def get_tool_registry(self):
-        return self._tool_registry
 
     def queue_context_attachment(self, text: str) -> None:
         if text and text.strip():
@@ -389,15 +312,6 @@ class Agent:
         self._initial_context_attachments_prepared = True
         if self._prepare_initial_attachments_fn is not None:
             self._prepare_initial_attachments_fn()
-
-    def start_memory_prefetch(self, user_message: str):
-        if self._start_memory_prefetch_fn is None:
-            return None
-        return self._start_memory_prefetch_fn(user_message)
-
-    def consume_memory_prefetch(self, prefetch) -> None:
-        if self._consume_memory_prefetch_fn is not None:
-            self._consume_memory_prefetch_fn(prefetch)
 
 
 def format_agent_results(results: list[dict]) -> str:

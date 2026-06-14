@@ -48,11 +48,6 @@ class SandboxConfig:
     def resolved_workspace_host_path(self) -> Path:
         return (self.workspace_host_path or Path.cwd()).resolve()
 
-    @property
-    def workspace_writable(self) -> bool:
-        return self.workspace_mode in ("workspace-write", "full-access")
-
-
 @dataclass(frozen=True)
 class CommandResult:
     stdout: str = ""

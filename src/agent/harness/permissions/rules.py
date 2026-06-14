@@ -60,33 +60,68 @@ def reset_permission_cache() -> None:
     _cached_rules = None
 
 
-def matches_rule(rule: Rule, tool_name: str, inp: dict) -> bool:
+def _normalize_path_text(path: str) -> str:
+    text = str(path or "").strip().replace("\\", "/")
+    while text.startswith("./"):
+        text = text[2:]
+    return text.rstrip("/")
+
+
+def _resolve_rule_path(path: str, cwd: Path | None) -> Path:
+    candidate = Path(path).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve(strict=False)
+    return ((cwd or Path.cwd()) / candidate).resolve(strict=False)
+
+
+def _path_matches_pattern(value: str, pattern: str, cwd: Path | None) -> bool:
+    value_text = _normalize_path_text(value)
+    pattern_text = _normalize_path_text(pattern)
+    if not value_text or not pattern_text:
+        return False
+
+    wildcard = pattern_text.endswith("*")
+    pattern_prefix = pattern_text[:-1] if wildcard else pattern_text
+
+    if wildcard:
+        value_abs = _normalize_path_text(str(_resolve_rule_path(value_text, cwd)))
+        pattern_abs = _normalize_path_text(str(_resolve_rule_path(pattern_prefix, cwd)))
+        return value_text.startswith(pattern_prefix) or value_abs.startswith(pattern_abs)
+
+    value_path = _resolve_rule_path(value_text, cwd)
+    pattern_path = _resolve_rule_path(pattern_prefix, cwd)
+
+    return value_path == pattern_path
+
+
+def matches_rule(rule: Rule, tool_name: str, inp: dict, *, cwd: Path | None = None) -> bool:
     rule_tool = rule.get("tool") or ""
     if not _matches_tool(rule_tool, tool_name):
         return False
     if rule["pattern"] is None:
         return True
 
-    value = ""
     if tool_name == "run_shell":
         value = str(inp.get("command", ""))
+        pattern = rule["pattern"]
+        if pattern.endswith("*"):
+            return value.startswith(pattern[:-1])
+        return value == pattern
+
     elif "file_path" in inp:
         value = str(inp["file_path"])
+        return _path_matches_pattern(value, rule["pattern"], cwd)
     else:
         return True
 
-    pattern = rule["pattern"]
-    if pattern.endswith("*"):
-        return value.startswith(pattern[:-1])
-    return value == pattern
 
 
-def rule_decision(tool_name: str, inp: dict) -> str | None:
+def rule_decision(tool_name: str, inp: dict, *, cwd: Path | None = None) -> str | None:
     rules = load_permission_rules()
     for rule in rules["deny"]:
-        if matches_rule(rule, tool_name, inp):
+        if matches_rule(rule, tool_name, inp, cwd=cwd):
             return "deny"
     for rule in rules["allow"]:
-        if matches_rule(rule, tool_name, inp):
+        if matches_rule(rule, tool_name, inp, cwd=cwd):
             return "allow"
     return None

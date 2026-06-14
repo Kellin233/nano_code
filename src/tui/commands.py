@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from ..cli.core.memory.store import list_memories
+from ..cli.core.memory.runtime import valid_topics_text
 from ..cli.core.skills import discover_skills
 from .state import CommandContext, CommandResult
 
@@ -19,10 +19,6 @@ class TuiCommand:
     handler: CommandHandler
     usage: str = ""
     aliases: tuple[str, ...] = field(default_factory=tuple)
-
-    @property
-    def display_usage(self) -> str:
-        return self.usage or f"/{self.name}"
 
 
 class CommandRegistry:
@@ -71,7 +67,8 @@ def default_commands() -> CommandRegistry:
     registry.register(TuiCommand("clear", "Clear conversation history", _clear))
     registry.register(TuiCommand("cost", "Show token usage and estimated cost", _cost, aliases=("tokens",)))
     registry.register(TuiCommand("compact", "Compact the conversation", _compact))
-    registry.register(TuiCommand("memory", "List saved memories", _memory))
+    registry.register(TuiCommand("memory", "Show local memory", _memory, usage="/memory [path|show <topic>]"))
+    registry.register(TuiCommand("remember", "Save local memory", _remember, usage="/remember <topic> <text>"))
     registry.register(TuiCommand("skills", "List user-invocable skills", _skills))
     registry.register(TuiCommand("help", "Show commands", _help))
     registry.register(TuiCommand("model", "Show the current model", _model))
@@ -100,13 +97,26 @@ async def _compact(ctx: CommandContext, args: str) -> CommandResult:
 
 
 async def _memory(ctx: CommandContext, args: str) -> CommandResult:
-    _ = args
-    memories = list_memories()
-    if not memories:
-        ctx.renderer.info("No memories saved yet.")
+    if not args:
+        ctx.renderer.info(ctx.agent.memory_summary())
         return CommandResult()
-    lines = [f"[{m.type}] {m.name} - {m.description}" for m in memories]
-    ctx.renderer.list_items(f"{len(memories)} memories:", lines)
+    name, _, rest = args.partition(" ")
+    if name == "path":
+        ctx.renderer.info(ctx.agent.memory_path())
+        return CommandResult()
+    if name == "show" and rest.strip():
+        ctx.renderer.info(ctx.agent.show_memory_topic(rest.strip()))
+        return CommandResult()
+    ctx.renderer.warning(f"Usage: /memory [path|show <topic>]. Topics: {valid_topics_text()}")
+    return CommandResult()
+
+
+async def _remember(ctx: CommandContext, args: str) -> CommandResult:
+    topic, _, text = args.partition(" ")
+    if not topic or not text.strip():
+        ctx.renderer.warning(f"Usage: /remember <topic> <text>. Topics: {valid_topics_text()}")
+        return CommandResult()
+    ctx.renderer.info(ctx.agent.remember_memory(topic, text.strip()))
     return CommandResult()
 
 

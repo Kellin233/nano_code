@@ -9,7 +9,7 @@ NanoCode 的核心架构是四层单向依赖：
 应用层：cli/session.py + cli/core/*
 框架层：agent/harness/*
 内核层：agent/*
-Provider：providers/* 只依赖 agent/types.py
+Provider：providers/* 只依赖 agent/types.py、agent/models.py 的纯 helper 和 provider SDK
 ```
 
 关键点：
@@ -30,8 +30,8 @@ Provider：providers/* 只依赖 agent/types.py
 | 扩展面 | Hook + Extension | Hooks/commands/插件式能力 | 配置和工具扩展 | 较少 |
 | 子 Agent | Fork-and-Return | Worktree + Skill | Multi-Agent + CSV | 无 |
 | Sandbox | bwrap/local/microsandbox | 容器级 | OS 级 | 无内置 |
-| 上下文压缩 | Persist/Snip/Microcompact/Collapse/Compact | 自动 | 自动 | Map/Reduce |
-| 记忆 | 文件式 + LLM 精选 | 文件式 | 内建持久化 | 无 |
+| 上下文压缩 | Tool Result Budget / Tool History Snip / Context Compact | 自动 | 自动 | Map/Reduce |
+| 记忆 | 轻量 Markdown topic + 启动注入 | 文件式 | 内建持久化 | 无 |
 | MCP | stdio transport | 完整 MCP | 内建 | 社区 |
 
 ## 3. 与 Claude Code 的差异
@@ -50,7 +50,8 @@ NanoCode 借鉴了 Codex CLI 的一些分层思想，例如审批/sandbox/agent 
 2. `AgentSession` 单装配点：所有 tools/memory/MCP/extensions 都在这里桥接。
 3. Hook 和 Extension 双扩展面：外部进程拦截与进程内 Python 扩展分工明确。
 4. Provider 独立：厂商 SDK 只出现在 `providers/`。
-5. 五层上下文压缩：从单结果落盘到全量 compact。
+5. durable session log + run trace/report 分离：resume 与诊断互不抢 source of truth。
+6. 三层上下文治理：单结果预算落盘、历史工具结果裁剪、保留最近原文的 Context Compact。
 
 ## 6. 已知代价
 

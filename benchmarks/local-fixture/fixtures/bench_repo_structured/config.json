@@ -1,0 +1,10 @@
+{
+  "service": {
+    "mode": "debug",
+    "retries": 1,
+    "features": {
+      "cache": false,
+      "metrics": true
+    }
+  }
+}

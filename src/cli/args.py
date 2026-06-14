@@ -11,8 +11,8 @@ from __future__ import annotations
 import argparse
 import os
 
+from .config import RuntimeConfig
 from .core.sandbox.config import build_sandbox_config
-from ..agent.agent import RuntimeConfig
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,6 +33,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true", help="Resume last session")
     parser.add_argument("--max-cost", type=float, default=None, help="Max USD spend")
     parser.add_argument("--max-turns", type=int, default=None, help="Max agentic turns")
+    parser.add_argument(
+        "--allowed-tools",
+        default=None,
+        help="Comma-separated tool allowlist for this run; empty value denies all tools",
+    )
     parser.add_argument(
         "--sandbox",
         choices=[
@@ -64,6 +69,25 @@ def resolve_permission_mode(args: argparse.Namespace) -> str:
     if args.dont_ask:
         return "dontAsk"
     return "default"
+
+
+def resolve_allowed_tools(value: str | None) -> set[str] | None:
+    """Parse a comma-separated tool allowlist."""
+    if value is None:
+        return None
+    return {part.strip() for part in value.split(",") if part.strip()}
+
+
+def resolve_context_window() -> int | None:
+    """Parse an optional benchmark/test context-window override."""
+    raw = os.environ.get("NANO_CODE_CONTEXT_WINDOW")
+    if not raw:
+        return None
+    try:
+        value = int(raw)
+    except ValueError:
+        return None
+    return value if value > 0 else None
 
 
 def resolve_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
@@ -107,10 +131,12 @@ def resolve_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
         thinking=args.thinking,
         max_cost_usd=args.max_cost,
         max_turns=args.max_turns,
+        context_window=resolve_context_window(),
         api_base=resolved_api_base if resolved_use_openai else None,
         anthropic_base_url=resolved_api_base if not resolved_use_openai else None,
         api_key=resolved_api_key,
         sandbox_config=build_sandbox_config(args),
+        allowed_tools=resolve_allowed_tools(args.allowed_tools),
     )
 
 
@@ -128,6 +154,7 @@ Options:
   --resume            Resume the last session
   --max-cost USD      Stop when estimated cost exceeds this amount
   --max-turns N       Stop after N agentic turns
+  --allowed-tools CSV Only allow this comma-separated tool list for the run
   --sandbox PROFILE   Shell sandbox profile
   --sandbox-network MODE
   --sandbox-image IMG OCI image for microsandbox mode

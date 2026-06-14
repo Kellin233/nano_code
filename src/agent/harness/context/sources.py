@@ -1,7 +1,7 @@
-"""上下文数据源：CLAUDE.md 解析、Git 状态、frontmatter + 共享数据类型。
+"""Context sources: project instructions, Git snapshot, frontmatter, and shared types.
 
 合并了原来的：
-  - claude_md.py（CLAUDE.md 发现、include 解析、指令加载）
+  - claude_md.py（project instruction discovery, include expansion）
   - git_context.py（Git 状态快照收集）
   - frontmatter.py（YAML frontmatter 解析/格式化）
 
@@ -9,7 +9,7 @@
 以避免 builder.py 和 sources.py 之间的循环导入。
 
 变更原因：
-  - 改 CLAUDE.md 发现规则 → 改 _discover_instruction_files
+  - 改 project instruction discovery → 改 _discover_instruction_files
   - 改 Git 上下文收集策略 → 改 collect_git_context
   - 改 frontmatter 格式 → 改 parse_frontmatter / format_frontmatter
 """
@@ -31,12 +31,6 @@ class PromptDiagnostic:
     level: Literal["info", "warning", "error"]
     source: str
     message: str
-
-
-@dataclass(frozen=True)
-class ContextAttachment:
-    title: str
-    body: str
 
 
 @dataclass
@@ -190,7 +184,7 @@ def _stdout(result: _GitRun | None) -> str:
     return result.stdout.strip()
 
 
-# ─── CLAUDE.md 加载 ──────────────────────────────
+# ─── Project instruction loading ─────────────────
 
 TEXT_EXTENSIONS = {".md", ".txt", ".rst", ".adoc", ".yaml", ".yml", ".json"}
 MAX_INCLUDE_DEPTH = 5
@@ -281,16 +275,14 @@ def _discover_instruction_files(cwd: Path, home: Path) -> list[tuple[Path, str]]
         seen.add(resolved)
         discovered.append((resolved, kind))
 
-    add(home / ".claude" / "CLAUDE.md", "user")
+    _ = home
     dirs = list(reversed([cwd, *cwd.parents]))
     for directory in dirs:
-        add(directory / "CLAUDE.md", "claude")
-        add(directory / ".claude" / "CLAUDE.md", "claude")
-        rules_dir = directory / ".claude" / "rules"
+        add(directory / "AGENTS.md", "agents")
+        rules_dir = directory / ".nanocode" / "rules"
         if rules_dir.is_dir():
             for rule in sorted(rules_dir.rglob("*.md"), key=lambda p: str(p)):
                 add(rule, "rule")
-        add(directory / "CLAUDE.local.md", "local")
     return discovered
 
 

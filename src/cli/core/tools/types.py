@@ -19,14 +19,30 @@ from pathlib import Path
 from typing import Any, Literal, Protocol
 
 from ....agent.types import (
-    CONTEXT_WINDOW_MARGIN,
-    DEFAULT_MAX_TOKENS,
-    MAX_RETRIES,
-    MAX_RETRY_DELAY_MS,
     ToolCall,
     ToolDef,
     ToolResult,
 )
+
+__all__ = [
+    "DEFAULT_MAX_RESULT_CHARS",
+    "DEFAULT_SHELL_TIMEOUT_MS",
+    "FunctionTool",
+    "TOOL_RESULT_CHAR_LIMITS",
+    "TOOL_RESULT_PREVIEW_CHARS",
+    "PermissionAction",
+    "PermissionDecision",
+    "PermissionMode",
+    "Tool",
+    "ToolCall",
+    "ToolCallFn",
+    "ToolContext",
+    "ToolDef",
+    "ToolMetadata",
+    "ToolOrigin",
+    "ToolResult",
+    "ValidationResult",
+]
 
 # ─── 类型别名 ──────────────────────────────────
 
@@ -41,6 +57,7 @@ ToolOrigin = Literal["builtin", "mcp", "custom", "extension"]
 class PermissionDecision:
     action: PermissionAction
     message: str = ""
+    code: str = ""
 
 
 @dataclass
@@ -65,10 +82,11 @@ class ValidationResult:
 class ToolContext:
     cwd: Path
     session_id: str
-    read_file_state: dict[str, float]
     sandbox_manager: Any | None = None
     mcp_manager: Any | None = None
-    agent: Any | None = None
+    execute_agent_tool: Callable[[dict], Awaitable[str]] | None = None
+    execute_skill_tool: Callable[[dict], Awaitable[str]] | None = None
+    execute_tool_search: Callable[[dict], str] | None = None
 
 # ─── Tool 协议 ──────────────────────────────────
 
@@ -154,25 +172,12 @@ class FunctionTool:
 
 # ─── 工具执行常量 ──────────────────────────────
 
-MAX_RESULT_CHARS = 50000
-DEFAULT_MAX_RESULT_CHARS = 200000  # 对标 Claude Code 50K，按 nanoCode 模型窗口可到 200K
+DEFAULT_MAX_RESULT_CHARS = 50_000
+TOOL_RESULT_PREVIEW_CHARS = 2_000
 TOOL_RESULT_CHAR_LIMITS: dict[str, int] = {
-    "grep_search": 20000,   # 搜索结果容易爆炸，收紧
-    "run_shell": 80000,     # shell 输出有时需要更多
-    # read_file 等不在此列表 → 走 DEFAULT_MAX_RESULT_CHARS
+    "grep_search": 20_000,
+    "list_files": 20_000,
 }
-
-# ─── 上下文压缩常量 ──────────────────────────────
-
-BUDGET_UTILIZATION_THRESHOLD = 0.5
-BUDGET_HIGH = 15000
-BUDGET_MEDIUM = 30000
-BUDGET_HIGH_UTILIZATION = 0.7
-SNIP_THRESHOLD = 0.60
-MICROCOMPACT_IDLE_S = 5 * 60
-KEEP_RECENT_RESULTS = 3
-COMPACT_SUMMARY_MAX_TOKENS = 2048
-COMPACT_UTILIZATION_THRESHOLD = 0.85
 
 # ─── Shell 与搜索常量 ──────────────────────────
 
@@ -191,8 +196,3 @@ DEFAULT_HOOK_TIMEOUT_MS = 3000
 MAX_LIST_FILES_RESULTS = 200
 MAX_GREP_RESULTS = 100
 MAX_GREP_MATCHES = 200
-
-# ─── 记忆系统 ──────────────────────────────────
-
-MAX_INDEX_LINES = 200
-MAX_INDEX_BYTES = 50 * 1024

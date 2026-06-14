@@ -4,7 +4,7 @@
 外部模块优先从这里导入，避免依赖包内具体文件结构。
 """
 
-from .prompt import build_skill_descriptions, execute_skill, resolve_skill_prompt
+from .prompt import build_skill_descriptions
 from .registry import (
     SkillRegistry,
     discover_skills,
@@ -24,9 +24,7 @@ __all__ = [
     "SkillRegistry",
     "build_skill_descriptions",
     "discover_skills",
-    "execute_skill",
     "get_default_registry",
     "get_skill_by_name",
     "reset_skill_cache",
-    "resolve_skill_prompt",
 ]

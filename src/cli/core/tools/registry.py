@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import contextlib
 import copy
-import os
-from pathlib import Path
+from collections.abc import Collection
 
 from .builtin import (
     CONCURRENCY_SAFE_BUILTIN_TOOLS,
@@ -21,8 +19,6 @@ from .builtin import (
 )
 from .types import (
     DEFAULT_SHELL_TIMEOUT_MS,
-    MAX_RESULT_CHARS,
-    TOOL_RESULT_CHAR_LIMITS,
     FunctionTool,
     Tool,
     ToolContext,
@@ -45,60 +41,19 @@ INTERNAL_SCHEMA_KEYS = {
 }
 
 
-def sanitize_tool_definition(tool: ToolDef) -> ToolDef:
-    return {k: copy.deepcopy(v) for k, v in tool.items() if k not in INTERNAL_SCHEMA_KEYS}
-
-
-def _truncate_result(result: str) -> str:
-    if len(result) <= MAX_RESULT_CHARS:
-        return result
-    keep_each = (MAX_RESULT_CHARS - 60) // 2
-    return (
-        result[:keep_each]
-        + f"\n\n[... truncated {len(result) - keep_each * 2} chars ...]\n\n"
-        + result[-keep_each:]
-    )
-
-
-def _mark_read(path: str, ctx: ToolContext) -> None:
-    abs_path = str(Path(path).resolve())
-    with contextlib.suppress(OSError):
-        ctx.read_file_state[abs_path] = os.path.getmtime(abs_path)
-
-
-def _needs_read_first(name: str, inp: dict, ctx: ToolContext) -> str | None:
-    abs_path = str(Path(inp["file_path"]).resolve())
-    if not os.path.exists(abs_path):
-        return None
-    if abs_path not in ctx.read_file_state:
-        verb = "writing" if name == "write_file" else "editing"
-        return f"Error: You must read this file before {verb}. Use read_file first to see its current contents."
-    if os.path.getmtime(abs_path) != ctx.read_file_state[abs_path]:
-        verb = "writing" if name == "write_file" else "editing"
-        return f"Warning: {inp['file_path']} was modified externally since your last read. Please read_file again before {verb}."
-    return None
-
-
 async def _call_builtin(name: str, inp: dict, ctx: ToolContext) -> ToolResult:
     if name == "read_file":
-        result = read_file(inp)
-        if not result.startswith("Error"):
-            _mark_read(inp["file_path"], ctx)
-        return ToolResult(_truncate_result(result), is_error=result.startswith("Error"))
+        result = read_file(inp, cwd=ctx.cwd)
+        return ToolResult(result, is_error=result.startswith("Error"))
 
     if name in ("write_file", "edit_file"):
-        blocked = _needs_read_first(name, inp, ctx)
-        if blocked:
-            return ToolResult(blocked, is_error=blocked.startswith("Error"))
-        result = write_file(inp) if name == "write_file" else edit_file(inp)
-        if not result.startswith("Error"):
-            _mark_read(inp["file_path"], ctx)
-        return ToolResult(_truncate_result(result), is_error=result.startswith("Error"))
+        result = write_file(inp, cwd=ctx.cwd) if name == "write_file" else edit_file(inp, cwd=ctx.cwd)
+        return ToolResult(result, is_error=result.startswith("Error"))
 
     if name == "list_files":
-        result = list_files(inp)
+        result = list_files(inp, cwd=ctx.cwd)
     elif name == "grep_search":
-        result = grep_search(inp)
+        result = grep_search(inp, cwd=ctx.cwd)
     elif name == "web_fetch":
         result = web_fetch(inp)
     elif name == "list_mcp_resources":
@@ -123,26 +78,20 @@ async def _call_builtin(name: str, inp: dict, ctx: ToolContext) -> ToolResult:
             return ToolResult(f"Error: invalid timeout: {inp.get('timeout')}", is_error=True)
         result = await ctx.sandbox_manager.run_shell(inp.get("command", ""), timeout_ms, ctx.cwd)
     elif name == "agent":
-        if not ctx.agent:
+        if ctx.execute_agent_tool is None:
             return ToolResult("Error: agent tool is unavailable", is_error=True)
-        result = await ctx.agent._execute_agent_tool(inp)
+        result = await ctx.execute_agent_tool(inp)
     elif name == "skill":
-        if not ctx.agent:
+        if ctx.execute_skill_tool is None:
             return ToolResult("Error: skill tool is unavailable", is_error=True)
-        result = await ctx.agent._execute_skill_tool(inp)
+        result = await ctx.execute_skill_tool(inp)
     elif name == "tool_search":
-        if not ctx.agent:
+        if ctx.execute_tool_search is None:
             return ToolResult("Error: tool_search is unavailable", is_error=True)
-        result = ctx.agent._execute_tool_search(inp)
+        result = ctx.execute_tool_search(inp)
     else:
         result = f"Unknown tool: {name}"
-    # 对于有独立截断策略的工具（TOOL_RESULT_CHAR_LIMITS 中配置的），
-    # 保留原始结果，交由 ToolRuntime._persist_large_result 统一处理。
-    needs_truncation = name not in TOOL_RESULT_CHAR_LIMITS
-    return ToolResult(
-        _truncate_result(result) if needs_truncation else result,
-        is_error=str(result).startswith("Error"),
-    )
+    return ToolResult(result, is_error=str(result).startswith("Error"))
 
 
 def _build_tool(
@@ -166,14 +115,14 @@ def _build_tool(
             if hasattr(ctx.mcp_manager, "call_tool_result"):
                 result_obj = await ctx.mcp_manager.call_tool_result(name, inp)
                 return ToolResult(
-                    _truncate_result(result_obj.text),
+                    result_obj.text,
                     is_error=bool(getattr(result_obj, "is_error", False)),
                     metadata={
                         "saved_files": list(getattr(result_obj, "saved_files", []) or []),
                     },
                 )
             result = await ctx.mcp_manager.call_tool(name, inp)
-            return ToolResult(_truncate_result(result), is_error=str(result).startswith("Error"))
+            return ToolResult(result, is_error=str(result).startswith("Error"))
 
         return FunctionTool(
             tool,
@@ -230,24 +179,7 @@ class ToolRegistry:
                 origin=origin,
                 default_concurrency_safe=default_concurrency_safe,
             )
-            read_only = stored.is_read_only({})
-            edit_tool = stored.is_edit_tool({})
-            concurrency_safe = stored.is_concurrency_safe({})
-
-            self._tools[name] = stored
-            self._metadata[name] = ToolMetadata(
-                name=name,
-                origin=origin,
-                deferred=stored.deferred,
-                concurrency_safe=concurrency_safe,
-                read_only=read_only,
-                edit_tool=edit_tool,
-                raw={
-                    k: copy.deepcopy(tool[k])
-                    for k in INTERNAL_SCHEMA_KEYS
-                    if k in tool
-                },
-            )
+            self._store_tool(str(name), stored, tool, origin=origin)
 
     def register(
         self,
@@ -279,18 +211,18 @@ class ToolRegistry:
                 default_concurrency_safe=default_concurrency_safe,
             )
 
-        read_only = stored.is_read_only({})
-        edit_tool = stored.is_edit_tool({})
-        concurrency_safe = stored.is_concurrency_safe({})
-        self._tools[str(name)] = stored
-        self._metadata[str(name)] = ToolMetadata(
-            name=str(name),
+        self._store_tool(str(name), stored, tool, origin=origin)
+
+    def _store_tool(self, name: str, stored: Tool, raw_tool: ToolDef, *, origin: ToolOrigin) -> None:
+        self._tools[name] = stored
+        self._metadata[name] = ToolMetadata(
+            name=name,
             origin=origin,
             deferred=stored.deferred,
-            concurrency_safe=concurrency_safe,
-            read_only=read_only,
-            edit_tool=edit_tool,
-            raw={k: copy.deepcopy(tool[k]) for k in INTERNAL_SCHEMA_KEYS if k in tool},
+            concurrency_safe=stored.is_concurrency_safe({}),
+            read_only=stored.is_read_only({}),
+            edit_tool=stored.is_edit_tool({}),
+            raw={k: copy.deepcopy(raw_tool[k]) for k in INTERNAL_SCHEMA_KEYS if k in raw_tool},
         )
 
     def replace_many(
@@ -313,30 +245,50 @@ class ToolRegistry:
             self._metadata.pop(name, None)
             self._activated_deferred.discard(name)
 
-    def active_definitions(self, denied: set[str] | None = None) -> list[ToolDef]:
+    def active_definitions(
+        self,
+        denied: set[str] | None = None,
+        allowed: Collection[str] | None = None,
+    ) -> list[ToolDef]:
         denied = denied or set()
         result: list[ToolDef] = []
         for name, tool in self._tools.items():
             metadata = self._metadata[name]
             if name in denied:
                 continue
+            if allowed is not None and name not in allowed:
+                continue
             if metadata.deferred and name not in self._activated_deferred:
                 continue
             result.append(tool.to_definition())
         return result
 
-    def deferred_names(self, denied: set[str] | None = None) -> list[str]:
+    def deferred_names(
+        self,
+        denied: set[str] | None = None,
+        allowed: Collection[str] | None = None,
+    ) -> list[str]:
         denied = denied or set()
         return [
             name
             for name, metadata in self._metadata.items()
-            if metadata.deferred and name not in self._activated_deferred and name not in denied
+            if metadata.deferred
+            and name not in self._activated_deferred
+            and name not in denied
+            and (allowed is None or name in allowed)
         ]
 
-    def search_deferred(self, query: str) -> list[ToolDef]:
+    def search_deferred(
+        self,
+        query: str,
+        *,
+        allowed: Collection[str] | None = None,
+        denied: Collection[str] | None = None,
+    ) -> list[ToolDef]:
         query = (query or "").strip()
         if not query:
             return []
+        denied_names = set(denied or ())
         if query.lower().startswith("select:"):
             selected = {
                 part.strip()
@@ -346,7 +298,13 @@ class ToolRegistry:
             selected_matches: list[ToolDef] = []
             for name, tool in self._tools.items():
                 metadata = self._metadata[name]
-                if metadata.deferred and name not in self._activated_deferred and name in selected:
+                if (
+                    metadata.deferred
+                    and name not in self._activated_deferred
+                    and name in selected
+                    and name not in denied_names
+                    and (allowed is None or name in allowed)
+                ):
                     self._activated_deferred.add(name)
                     selected_matches.append(tool.to_definition())
             return selected_matches
@@ -358,6 +316,10 @@ class ToolRegistry:
         for name, tool in self._tools.items():
             metadata = self._metadata[name]
             if not metadata.deferred or name in self._activated_deferred:
+                continue
+            if name in denied_names:
+                continue
+            if allowed is not None and name not in allowed:
                 continue
             description = tool.description or ""
             raw = metadata.raw

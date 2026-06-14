@@ -6,16 +6,12 @@ from .builder import (
     build_stable_system_prompt,
     build_startup_context,
     build_system_prompt,
-    get_git_context,
-    load_claude_md,
     render_deferred_tools_attachment,
     render_mcp_delta_attachment,
-    render_memory_attachment,
     render_skill_listing_attachment,
     render_system_reminder,
 )
 from .sources import (
-    ContextAttachment,
     FrontmatterResult,
     GitContextResult,
     InstructionLoadResult,
@@ -28,7 +24,6 @@ from .sources import (
 )
 
 __all__ = [
-    "ContextAttachment",
     "FrontmatterResult",
     "GitContextResult",
     "InstructionLoadResult",
@@ -41,13 +36,10 @@ __all__ = [
     "build_system_prompt",
     "collect_git_context",
     "format_frontmatter",
-    "get_git_context",
-    "load_claude_md",
     "load_project_instructions",
     "parse_frontmatter",
     "render_deferred_tools_attachment",
     "render_mcp_delta_attachment",
-    "render_memory_attachment",
     "render_skill_listing_attachment",
     "render_system_reminder",
 ]

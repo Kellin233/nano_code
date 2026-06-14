@@ -8,6 +8,7 @@ from typing import Literal
 
 PathAction = Literal["allow", "confirm", "deny"]
 PathConfirmReason = Literal["protected", "workspace_boundary", ""]
+WRITE_TOOL_NAMES = {"write_file", "edit_file"}
 
 
 @dataclass(frozen=True)
@@ -65,14 +66,17 @@ def check_path_policy(tool_name: str, inp: dict, cwd: Path | None = None) -> Pat
     workspace = (cwd or Path.cwd()).resolve()
     path = _resolve_user_path(str(raw), workspace)
 
+    outside_workspace = not _is_relative_to(path, workspace)
+    if outside_workspace and tool_name in WRITE_TOOL_NAMES:
+        return PathDecision("deny", f"path outside workspace: {path}", reason="workspace_boundary")
+
     if _is_protected(path, workspace):
-        if tool_name in {"write_file", "edit_file"}:
+        if tool_name in WRITE_TOOL_NAMES:
             return PathDecision("confirm", f"protected path: {path}", reason="protected")
         if tool_name == "read_file":
             return PathDecision("confirm", f"read protected path: {path}", reason="protected")
 
-    if not _is_relative_to(path, workspace):
+    if outside_workspace:
         return PathDecision("confirm", f"path outside workspace: {path}", reason="workspace_boundary")
 
     return PathDecision("allow")
-

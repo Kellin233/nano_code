@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import copy
 from pathlib import Path
 
 from ....agent.harness.context.sources import parse_frontmatter
@@ -179,6 +180,33 @@ def build_agent_descriptions() -> str:
     for t in custom:
         lines.append(f"- **{t['name']}**: {t['description']}")
     return "\n".join(lines)
+
+
+def build_agent_tool_definition(base: dict) -> dict:
+    """Return an agent tool schema with current built-in and custom agent types."""
+    tool = copy.deepcopy(base)
+    types = get_available_agent_types()
+    names = [item["name"] for item in types]
+    properties = tool.get("input_schema", {}).get("properties", {})
+    type_schema = properties.get("type")
+    if isinstance(type_schema, dict):
+        type_schema["enum"] = names
+    tasks_schema = properties.get("tasks")
+    task_type_schema = (
+        tasks_schema.get("items", {})
+        .get("properties", {})
+        .get("type")
+        if isinstance(tasks_schema, dict)
+        else None
+    )
+    if isinstance(task_type_schema, dict):
+        task_type_schema["enum"] = names
+
+    custom = types[3:]
+    if custom:
+        listing = "; ".join(f"{item['name']}: {item['description']}" for item in custom)
+        tool["description"] = f"{tool.get('description', '')}\nAvailable custom agent types: {listing}"
+    return tool
 
 
 def reset_agent_cache() -> None:

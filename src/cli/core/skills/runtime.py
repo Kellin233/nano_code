@@ -149,6 +149,7 @@ class ActiveSkillManager:
             rendered_prompt=invocation.rendered_prompt,
             args=invocation.args,
             invoked_by=invocation.invoked_by,
+            allowed_tools=invocation.allowed_tools,
             disallowed_tools=invocation.disallowed_tools,
             last_used_at=time.time(),
             approx_token_count=_approx_tokens(invocation.rendered_prompt),
@@ -200,6 +201,19 @@ class ActiveSkillManager:
             if skill.disallowed_tools:
                 denied.update(skill.disallowed_tools)
         return denied
+
+    def allowed_tools(self) -> set[str] | None:
+        allowed_sets = [
+            set(skill.allowed_tools)
+            for skill in self._skills.values()
+            if skill.allowed_tools
+        ]
+        if not allowed_sets:
+            return None
+        allowed = allowed_sets[0]
+        for item in allowed_sets[1:]:
+            allowed &= item
+        return allowed
 
     def _trim(self) -> None:
         active = self.list_active()

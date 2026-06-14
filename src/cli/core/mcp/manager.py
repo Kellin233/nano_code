@@ -81,9 +81,6 @@ class McpManager:
     def get_tool_definitions(self) -> list[dict[str, Any]]:
         return [self._tool_to_definition(tool) for tool in self._tools.values()]
 
-    def is_mcp_tool(self, name: str) -> bool:
-        return name in self._tool_routes or name.startswith("mcp__")
-
     async def call_tool(self, prefixed_name: str, args: dict[str, Any]) -> str:
         result = await self.call_tool_result(prefixed_name, args)
         return result.text

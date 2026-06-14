@@ -1,6 +1,5 @@
-"""Structured long-term memory package.
+"""Lightweight local markdown memory.
 
-Import concrete functions from the module that owns the behavior, for example
-`memory.store`, `memory.retrieval`, or `memory.rendering`.
+Project instructions live in AGENTS.md and .nanocode/rules/*.md.
+Local memory lives under ~/.nanocode/projects/<repo_key>/memory/.
 """
-

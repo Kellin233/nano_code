@@ -7,14 +7,25 @@
 from __future__ import annotations
 
 import json
-import asyncio
-import time
 from collections.abc import Awaitable, Callable
 from typing import Any, cast
 
 import anthropic
 
-from ..agent.types import DEFAULT_MAX_TOKENS, MAX_RETRIES, MAX_RETRY_DELAY_MS, ToolCall
+from ..agent.models import (
+    get_max_output_tokens,
+    model_supports_adaptive_thinking,
+    model_supports_thinking,
+    with_retry,
+)
+from ..agent.types import (
+    DEFAULT_MAX_TOKENS,
+    ConversationHistory,
+    TextBlock,
+    ToolCall,
+    ToolResultBlock,
+    ToolUseBlock,
+)
 from .base import Backend, BackendResponse, TokenUsage
 
 
@@ -32,48 +43,59 @@ def _usage_value(usage, *names: str) -> int:
     return 0
 
 
-def _model_supports_thinking(model: str) -> bool:
-    m = model.lower()
-    if "claude-3-" in m or "3-5-" in m or "3-7-" in m:
-        return False
-    return "claude" in m and any(x in m for x in ("opus", "sonnet", "haiku"))
+def to_anthropic_messages(conversation: ConversationHistory) -> list[dict]:
+    messages: list[dict] = []
+    pending_user_blocks: list[dict] = []
+
+    def flush_user() -> None:
+        if not pending_user_blocks:
+            return
+        messages.append({"role": "user", "content": _anthropic_user_content(pending_user_blocks)})
+        pending_user_blocks.clear()
+
+    for message in conversation:
+        if message.role == "user":
+            for block in message.content:
+                if isinstance(block, TextBlock):
+                    pending_user_blocks.append({"type": "text", "text": block.text})
+            continue
+
+        if message.role == "tool_result":
+            for block in message.content:
+                if isinstance(block, ToolResultBlock):
+                    payload = {
+                        "type": "tool_result",
+                        "tool_use_id": block.tool_use_id,
+                        "content": block.content,
+                    }
+                    if block.is_error:
+                        payload["is_error"] = True
+                    pending_user_blocks.append(payload)
+            continue
+
+        flush_user()
+        content: list[dict] = []
+        for block in message.content:
+            if isinstance(block, TextBlock):
+                content.append({"type": "text", "text": block.text})
+            elif isinstance(block, ToolUseBlock):
+                content.append({
+                    "type": "tool_use",
+                    "id": block.id,
+                    "name": block.name,
+                    "input": dict(block.input),
+                })
+        if content:
+            messages.append({"role": "assistant", "content": content})
+
+    flush_user()
+    return messages
 
 
-def _model_supports_adaptive_thinking(model: str) -> bool:
-    m = model.lower()
-    return "opus-4-6" in m or "sonnet-4-6" in m
-
-
-def _get_max_output_tokens(model: str) -> int:
-    m = model.lower()
-    if "opus-4-6" in m:
-        return 64000
-    if "sonnet-4-6" in m:
-        return 32000
-    if any(x in m for x in ("opus-4", "sonnet-4", "haiku-4")):
-        return 32000
-    return DEFAULT_MAX_TOKENS
-
-
-def _is_retryable(error: Exception) -> bool:
-    msg = str(error)
-    if "model_not_found" in msg or "No available channel" in msg:
-        return False
-    status = getattr(error, "status_code", None) or getattr(error, "status", None)
-    if status in (429, 503, 529):
-        return True
-    return "overloaded" in msg or "ECONNRESET" in msg or "ETIMEDOUT" in msg
-
-
-async def _with_retry(fn, max_retries: int = MAX_RETRIES) -> Any:
-    for attempt in range(max_retries + 1):
-        try:
-            return await fn()
-        except Exception as error:
-            if attempt >= max_retries or not _is_retryable(error):
-                raise
-            delay = min(1000 * (2 ** attempt), MAX_RETRY_DELAY_MS) / 1000 + (hash(str(time.time())) % 1000) / 1000
-            await asyncio.sleep(delay)
+def _anthropic_user_content(blocks: list[dict]) -> str | list[dict]:
+    if all(block.get("type") == "text" for block in blocks):
+        return "\n\n".join(str(block.get("text") or "") for block in blocks)
+    return list(blocks)
 
 
 class AnthropicBackend(Backend):
@@ -91,24 +113,24 @@ class AnthropicBackend(Backend):
         self.model = model
 
     def supports_thinking(self, model: str) -> bool:
-        return _model_supports_thinking(model)
+        return model_supports_thinking(model)
 
     def supports_adaptive_thinking(self, model: str) -> bool:
-        return _model_supports_adaptive_thinking(model)
+        return model_supports_adaptive_thinking(model)
 
     def resolve_thinking_mode(self, thinking_enabled: bool) -> str:
         if not thinking_enabled:
             return "disabled"
-        if not _model_supports_thinking(self.model):
+        if not model_supports_thinking(self.model):
             return "disabled"
-        if _model_supports_adaptive_thinking(self.model):
+        if model_supports_adaptive_thinking(self.model):
             return "adaptive"
         return "enabled"
 
     async def call(
         self,
         *,
-        messages: list[dict],
+        conversation: ConversationHistory,
         system: str,
         tools: list[dict],
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,
@@ -117,13 +139,13 @@ class AnthropicBackend(Backend):
         """流式调用 Anthropic API，返回 BackendResponse。"""
 
         async def _do():
-            max_output = _get_max_output_tokens(self.model)
+            max_output = get_max_output_tokens(self.model)
             create_params: dict[str, Any] = {
                 "model": self.model,
                 "max_tokens": max_output if thinking_mode != "disabled" else DEFAULT_MAX_TOKENS,
                 "system": system,
                 "tools": tools,
-                "messages": messages,
+                "messages": to_anthropic_messages(conversation),
             }
 
             if thinking_mode in ("adaptive", "enabled"):
@@ -210,7 +232,7 @@ class AnthropicBackend(Backend):
                 ),
             )
 
-        return cast(BackendResponse, await _with_retry(_do))
+        return cast(BackendResponse, await with_retry(_do))
 
     @staticmethod
     def block_to_dict(block) -> dict:

@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
+from ....agent.harness.persistence.atomic import write_bytes_atomic, write_text_atomic
 from .types import McpCallResult
 
 TEXT_BLOCK_LIMIT = 50 * 1024
@@ -114,7 +115,7 @@ def _save_text(server: str, tool: str, index: str, text: str) -> str:
     output_dir = _output_dir()
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"{int(time.time() * 1000)}-{_safe_name(server)}-{_safe_name(tool)}-{_safe_name(index)}.txt"
-    path.write_text(text, encoding="utf-8")
+    write_text_atomic(path, text)
     return str(path.resolve())
 
 
@@ -125,9 +126,9 @@ def _save_blob(server: str, tool: str, index: int, mime_type: str, data: str) ->
     path = output_dir / f"{int(time.time() * 1000)}-{_safe_name(server)}-{_safe_name(tool)}-{index}{ext}"
     try:
         payload = base64.b64decode(data, validate=False)
-        path.write_bytes(payload)
+        write_bytes_atomic(path, payload)
     except Exception:
-        path.write_text(data, encoding="utf-8")
+        write_text_atomic(path, data)
     return str(path.resolve())
 
 

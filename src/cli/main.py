@@ -44,7 +44,8 @@ def main() -> None:
         )
         sys.exit(1)
 
-    session = create_session(config)
+    thread_id = _resume_thread_id(args)
+    session = create_session(config, thread_id=thread_id)
     prompt = " ".join(args.prompt) if args.prompt else None
 
     if prompt:
@@ -62,7 +63,7 @@ async def _run_once(session, prompt: str, args) -> None:
             _ = message
             return True
 
-        session.set_confirm_fn(_confirm_auto)
+        session.set_confirm_fn(_confirm_auto, auto_confirm=True)
     else:
 
         async def confirm(message: str) -> bool:
@@ -100,21 +101,24 @@ async def _run_interactive(session, args) -> None:
 def _restore_if_requested(session, args) -> None:
     if not args.resume:
         return
-    from ..agent.harness.session import get_latest_session_id, load_session
+
+    if not getattr(args, "_resume_session_id", None):
+        return
+    session.restore_from_persistence()
+
+
+def _resume_thread_id(args) -> str | None:
+    if not args.resume:
+        return None
+    from ..agent.harness.persistence import get_latest_session_id
     from ..tui.renderer import get_renderer
 
     session_id = get_latest_session_id()
     if not session_id:
         get_renderer().info("No previous sessions found.")
-        return
-    stored = load_session(session_id)
-    if stored:
-        session.restore_session({
-            "anthropicMessages": stored.get("anthropicMessages"),
-            "openaiMessages": stored.get("openaiMessages"),
-        })
-    else:
-        get_renderer().info("No session found to resume.")
+        return None
+    args._resume_session_id = session_id
+    return session_id
 
 
 if __name__ == "__main__":

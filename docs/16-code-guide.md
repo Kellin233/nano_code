@@ -30,14 +30,16 @@ cli/core/tools/runtime.py
 | `cli/session.py` | 唯一装配点，连接 Agent、Backend、ToolRuntime、Memory、MCP、Hooks、Extensions |
 | `agent/agent.py` | Agent 状态容器、消息历史、预算、回调槽位 |
 | `agent/loop.py` | LLM/tool 循环，只依赖注入回调 |
-| `agent/types.py` | core 协议类型：ToolCall、ToolResult、RuntimeEvent |
+| `agent/types.py` | core 协议类型：ConversationHistory、ToolCall、ToolResult、RuntimeEvent |
 | `providers/base.py` | Backend 抽象和统一返回结构 |
 | `providers/anthropic.py` | Anthropic 流式解析和 tool_use 转换 |
 | `providers/openai.py` | OpenAI-compatible 流式解析和 function call 转换 |
 | `cli/core/tools/runtime.py` | 工具执行管线 |
 | `cli/core/tools/registry.py` | ToolRegistry、deferred、MCP/extension 工具注册 |
 | `agent/harness/compressor.py` | 五层上下文压缩 |
-| `agent/harness/context/sources.py` | CLAUDE.md、Git 快照、frontmatter |
+| `agent/harness/context/sources.py` | AGENTS.md、.nanocode/rules、Git 快照、frontmatter |
+| `agent/harness/persistence/session_log.py` | session.jsonl checkpoint/resume |
+| `agent/harness/persistence/run_store.py` | run trace/report 持久化 |
 | `cli/core/extensions/runner.py` | Extension 事件分发和错误隔离 |
 
 ## 3. 常见修改路径
@@ -53,6 +55,8 @@ cli/core/tools/runtime.py
 | 改 sandbox profile | `cli/core/sandbox/config.py` / `types.py` |
 | 改上下文模板 | `agent/harness/context/builder.py` |
 | 改压缩策略 | `agent/harness/compressor.py` |
+| 改 checkpoint/resume | `agent/harness/persistence/session_log.py` + `cli/session.py` |
+| 改 run artifacts / benchmark report | `agent/harness/persistence/run_store.py`、`report.py`、`benchmarks/local-fixture/run.py` |
 | 改 TUI 命令 | `tui/commands.py` / `tui/app.py` |
 | 改 server protocol | `cli/core/protocol/messages.py` / `cli/core/server/app_server.py` |
 

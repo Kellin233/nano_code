@@ -18,6 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+from ....agent.harness.persistence.atomic import write_text_atomic
 from ...logging_config import get_logger
 from ..memory.store import sync_memory_file
 from .types import (
@@ -34,6 +35,18 @@ from .types import (
 READ_TOOL_NAMES = {"read_file", "list_files", "grep_search", "web_fetch", "list_mcp_resources", "read_mcp_resource"}
 EDIT_TOOL_NAMES = {"write_file", "edit_file"}
 CONCURRENCY_SAFE_BUILTIN_TOOLS = {"read_file", "list_files", "grep_search", "web_fetch", "list_mcp_resources", "read_mcp_resource"}
+DEFAULT_SEARCH_EXCLUDE_DIRS = {
+    ".git",
+    ".nanocode",
+    ".mypy_cache",
+    ".pytest_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "venv",
+}
 
 # ─── 内置工具 Schema 定义 ────────────────────────
 
@@ -43,8 +56,9 @@ BUILTIN_TOOL_DEFINITIONS: list[ToolDef] = [
         "description": (
             "Read the contents of a file, optionally limited to a range of lines. "
             "Returns the file content with line numbers. "
-            "For large files (30KB+), the result is automatically folded to keep context manageable; "
-            "use offset/limit to read specific sections when that happens."
+            "For large files, locate relevant lines with grep_search first, then use offset/limit "
+            "to read the smallest useful section. If an unrestricted read returns too much text, "
+            "the runtime persists the full result and sends only a preview with an artifact reference."
         ),
         "input_schema": {
             "type": "object",
@@ -220,9 +234,16 @@ logger = get_logger("tools.builtin")
 IS_WIN = sys.platform == "win32"
 
 
-def read_file(inp: dict) -> str:
+def _resolve_tool_path(raw: str | Path, cwd: Path | None = None) -> Path:
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path
+    return (cwd or Path.cwd()) / path
+
+
+def read_file(inp: dict, *, cwd: Path | None = None) -> str:
     try:
-        content = Path(inp["file_path"]).read_text()
+        content = _resolve_tool_path(inp["file_path"], cwd).read_text()
         lines = content.split("\n")
         total = len(lines)
 
@@ -251,12 +272,12 @@ def read_file(inp: dict) -> str:
         return f"Error reading file: {e}"
 
 
-def write_file(inp: dict) -> str:
+def write_file(inp: dict, *, cwd: Path | None = None) -> str:
     try:
-        path = Path(inp["file_path"])
+        path = _resolve_tool_path(inp["file_path"], cwd)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(inp["content"])
-        _auto_update_memory_index(str(path))
+        write_text_atomic(path, inp["content"], durable=False)
+        _auto_update_memory_index(path, cwd)
         lines = inp["content"].split("\n")
         line_count = len(lines)
         preview = "\n".join(f"{i+1:4d} | {line}" for i, line in enumerate(lines[:30]))
@@ -266,9 +287,9 @@ def write_file(inp: dict) -> str:
         return f"Error writing file: {e}"
 
 
-def _auto_update_memory_index(file_path: str) -> None:
+def _auto_update_memory_index(file_path: str | Path, workspace: Path | None = None) -> None:
     try:
-        sync_memory_file(Path(file_path))
+        sync_memory_file(Path(file_path), workspace)
     except Exception:
         logger.debug("Failed to sync memory index for %s", file_path, exc_info=True)
 
@@ -304,9 +325,9 @@ def _generate_diff(old_content: str, old_string: str, new_string: str) -> str:
     return "\n".join(parts)
 
 
-def edit_file(inp: dict) -> str:
+def edit_file(inp: dict, *, cwd: Path | None = None) -> str:
     try:
-        path = Path(inp["file_path"])
+        path = _resolve_tool_path(inp["file_path"], cwd)
         content = path.read_text()
 
         actual = _find_actual_string(content, inp["old_string"])
@@ -318,7 +339,8 @@ def edit_file(inp: dict) -> str:
             return f"Error: old_string found {count} times in {inp['file_path']}. Must be unique."
 
         new_content = content.replace(actual, inp["new_string"], 1)
-        path.write_text(new_content)
+        write_text_atomic(path, new_content, durable=False)
+        _auto_update_memory_index(path, cwd)
 
         diff = _generate_diff(content, actual, inp["new_string"])
         quote_note = " (matched via quote normalization)" if actual != inp["old_string"] else ""
@@ -327,15 +349,17 @@ def edit_file(inp: dict) -> str:
         return f"Error editing file: {e}"
 
 
-def list_files(inp: dict) -> str:
+def list_files(inp: dict, *, cwd: Path | None = None) -> str:
     try:
-        base = Path(inp.get("path") or ".")
+        raw_base = inp.get("path") or "."
+        base = _resolve_tool_path(raw_base, cwd)
         pattern = inp["pattern"]
+        include_ignored = _explicitly_targets_excluded_dir(str(raw_base), str(pattern))
         files = []
         for p in base.glob(pattern):
             if p.is_file():
-                rel = str(p.relative_to(base) if base != Path(".") else p)
-                if any(part in {".git", ".venv", "venv", "__pycache__"} for part in rel.split(os.sep)):
+                rel = str(p.relative_to(base))
+                if not include_ignored and _has_excluded_dir(rel):
                     continue
                 files.append(rel)
                 if len(files) >= MAX_LIST_FILES_RESULTS:
@@ -350,19 +374,29 @@ def list_files(inp: dict) -> str:
         return f"Error listing files: {e}"
 
 
-def grep_search(inp: dict) -> str:
+def grep_search(inp: dict, *, cwd: Path | None = None) -> str:
     pattern = inp["pattern"]
-    path = inp.get("path") or "."
+    raw_path = inp.get("path") or "."
     include = inp.get("include")
+    include_ignored = _explicitly_targets_excluded_dir(str(raw_path), str(include or ""))
+    search_path = _resolve_tool_path(raw_path, cwd)
+    grep_cwd: str | None = None
+    grep_path = str(search_path)
+    if cwd is not None and not Path(raw_path).expanduser().is_absolute():
+        grep_cwd = str(cwd)
+        grep_path = str(raw_path)
 
     if not IS_WIN:
         try:
             args = ["grep", "--line-number", "--color=never", "-r", "-E"]
+            if not include_ignored:
+                for dirname in sorted(DEFAULT_SEARCH_EXCLUDE_DIRS):
+                    args.append(f"--exclude-dir={dirname}")
             if include:
                 args.append(f"--include={include}")
-            args.extend(["--", pattern, path])
+            args.extend(["--", pattern, grep_path])
             result = subprocess.run(
-                args, capture_output=True, text=True, timeout=10
+                args, cwd=grep_cwd, capture_output=True, text=True, timeout=10
             )
             if result.returncode == 0:
                 lines = [line for line in result.stdout.split("\n") if line]
@@ -373,10 +407,10 @@ def grep_search(inp: dict) -> str:
         except Exception:
             logger.debug("System grep failed; falling back to Python grep", exc_info=True)
 
-    return _grep_python(pattern, path, include)
+    return _grep_python(pattern, str(search_path), include, include_ignored=include_ignored)
 
 
-def _grep_python(pattern: str, directory: str, include: str | None) -> str:
+def _grep_python(pattern: str, directory: str, include: str | None, *, include_ignored: bool = False) -> str:
     try:
         regex = re.compile(pattern)
     except re.error as exc:
@@ -405,7 +439,7 @@ def _grep_python(pattern: str, directory: str, include: str | None) -> str:
         except OSError:
             return
         for name in entries:
-            if name.startswith(".") or name in {"venv", "__pycache__"}:
+            if not include_ignored and name in DEFAULT_SEARCH_EXCLUDE_DIRS:
                 continue
             full = os.path.join(d, name)
             if os.path.isdir(full):
@@ -423,6 +457,14 @@ def _grep_python(pattern: str, directory: str, include: str | None) -> str:
     if len(matches) > MAX_GREP_RESULTS:
         output += f"\n... and {len(matches) - 100} more matches"
     return output
+
+
+def _has_excluded_dir(path: str) -> bool:
+    return any(part in DEFAULT_SEARCH_EXCLUDE_DIRS for part in Path(path).parts)
+
+
+def _explicitly_targets_excluded_dir(*values: str) -> bool:
+    return any(_has_excluded_dir(value) for value in values if value)
 
 
 def run_shell(inp: dict) -> str:

@@ -60,6 +60,7 @@ class ActiveSkill:
     rendered_prompt: str
     args: str
     invoked_by: str
+    allowed_tools: list[str] | None
     disallowed_tools: list[str] | None
     last_used_at: float
     approx_token_count: int

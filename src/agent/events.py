@@ -52,11 +52,17 @@ def ToolCallFinished(call: ToolCall, result: ToolResult) -> RuntimeEvent:
     })
 
 
-def PermissionRequested(call: ToolCall, message: str) -> RuntimeEvent:
+def PermissionRequested(
+    call: ToolCall,
+    message: str,
+    *,
+    requires_explicit_confirmation: bool = False,
+) -> RuntimeEvent:
     return RuntimeEvent(type="approval.requested", payload={
         "call_id": call.id,
         "tool_name": call.name,
         "message": message,
+        "requires_explicit_confirmation": requires_explicit_confirmation,
     })
 
 

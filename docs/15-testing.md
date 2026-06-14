@@ -25,29 +25,30 @@ test/tui/
 
 ## 2. 推荐命令
 
-项目使用 pytest：
+当前测试使用标准库 `unittest` 组织，`pyproject.toml` 也保留了 pytest 配置以便兼容运行。日常验证优先使用：
 
 ```bash
-python -m pytest -q
+ruff check src test
+PYTHONPATH=src python -m unittest discover -s test
 ```
 
-在本项目当前环境中建议使用：
+如果需要用 pytest 跑同一批测试，也可以执行：
 
 ```bash
-/root/miniconda3/envs/medicalgpt/bin/python -m pytest -q
+PYTHONPATH=src python -m pytest -q
 ```
 
 编译检查：
 
 ```bash
-/root/miniconda3/envs/medicalgpt/bin/python -m compileall -q src
+python -m compileall -q src
 ```
 
 安装和入口 smoke：
 
 ```bash
-/root/miniconda3/envs/medicalgpt/bin/python -m pip install -e . --no-deps
-/root/miniconda3/envs/medicalgpt/bin/nanocode --help
+python -m pip install -e . --no-deps
+nanocode --help
 ```
 
 ## 3. 测试分层
@@ -55,7 +56,7 @@ python -m pytest -q
 | 层 | 测什么 |
 |----|--------|
 | Agent core | Agent 状态、消息格式、预算、AgentLoop 状态机、RuntimeEvent |
-| Harness | Compressor、context builder、hooks、permissions、session store |
+| Harness | Compressor、context builder、hooks、permissions、persistence/session log/run store |
 | Providers | BackendResponse、流式解析、schema 转换、thinking mode |
 | cli/core | tools、sandbox、skills、memory、MCP、subagents、extensions |
 | CLI/TUI/Server | 参数解析、REPL 命令、事件渲染、protocol |

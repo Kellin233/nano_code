@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-from ..agent.types import ToolCall
+from ..agent.types import ConversationHistory, ToolCall
 
 
 @dataclass
@@ -40,7 +40,7 @@ class Backend(ABC):
     async def call(
         self,
         *,
-        messages: list[dict],
+        conversation: ConversationHistory,
         system: str,
         tools: list[dict],
         on_text_delta: Callable[[str], Awaitable[None]] | None = None,

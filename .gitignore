@@ -14,13 +14,17 @@ dist/
 .ruff_cache/
 .mypy_cache/
 
-.nano-code/
+.nanocode/
 .github/
 remake/
-test/
+test/*
+!test/benchmarks/
+!test/benchmarks/**
+test/**/__pycache__/
+test/**/*.py[cod]
 benchmarks/API.txt
-benchmarks/swebench/repos/
-benchmarks/swebench/result/
-benchmarks/terminal-bench/result/
+benchmarks/swebench
+benchmarks/terminal-bench
+benchmarks/local-fixture/results
 CLAUDE.md
 AGENTS.md

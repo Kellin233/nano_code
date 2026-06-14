@@ -6,7 +6,11 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any
 
+from ....agent.harness.approvals import ApprovalDecision
+from ....agent.harness.persistence import list_sessions
 from ....agent.models import DEFAULT_MODEL
+from ...config import RuntimeConfig
+from ...thread import RuntimeThread
 from ..protocol.messages import (
     APPROVAL_RESOLVE,
     SESSION_LIST,
@@ -19,10 +23,6 @@ from ..protocol.messages import (
     ProtocolRequest,
     ProtocolResponse,
 )
-from ....agent.harness.approvals import ApprovalDecision
-from ...thread import RuntimeThread
-from ....agent.agent import RuntimeConfig
-from ....agent.harness.session import list_sessions, load_session
 
 
 class NanoCodeServer:
@@ -66,14 +66,9 @@ class NanoCodeServer:
             raise ProtocolError("invalid_params", "thread_id is required")
         config = self._config(params.get("config") or {})
         thread = RuntimeThread(config, thread_id=thread_id)
-        session = load_session(thread_id)
-        if session:
-            thread.restore_session({
-                "anthropicMessages": session.get("anthropicMessages"),
-                "openaiMessages": session.get("openaiMessages"),
-            })
+        resumed = thread.restore_from_persistence()
         self.threads[thread_id] = thread
-        return {"thread_id": thread_id, "resumed": bool(session)}
+        return {"thread_id": thread_id, "resumed": resumed}
 
     async def _thread_submit(self, request: ProtocolRequest) -> AsyncIterator[dict[str, Any]]:
         params = request.params
@@ -138,7 +133,18 @@ class NanoCodeServer:
             permission_mode=str(params.get("permission_mode") or "default"),
             max_cost_usd=params.get("max_cost_usd"),
             max_turns=params.get("max_turns"),
+            allowed_tools=self._allowed_tools(params.get("allowed_tools")),
         )
 
     def _response(self, request_id: str | int | None, result: dict[str, Any]) -> dict[str, Any]:
         return ProtocolResponse(id=request_id, result=result).to_message()
+
+    @staticmethod
+    def _allowed_tools(value: Any) -> set[str] | None:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            return {part.strip() for part in value.split(",") if part.strip()}
+        if isinstance(value, list):
+            return {str(part).strip() for part in value if str(part).strip()}
+        return None

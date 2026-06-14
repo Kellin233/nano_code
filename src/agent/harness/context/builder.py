@@ -5,7 +5,7 @@
   - startup.py（启动上下文组装）
   - prompt.py（公开入口）
   - attachments.py（附件渲染）
-  - types.py（PromptBundle/ PromptDiagnostic/ ContextAttachment）
+  - types.py（PromptBundle / PromptDiagnostic）
 
 变更原因：
   - 改 system prompt 文字 → 改 STABLE_SYSTEM_PROMPT
@@ -61,6 +61,14 @@ Project instructions, current date, git snapshot, memory, available skills, MCP 
  - Avoid over-engineering. Only make changes directly requested or clearly necessary. Keep solutions simple and focused.
  - Avoid backwards-compatibility hacks. If you are certain something is unused, delete it completely.
  - If the user asks for help with the CLI, inform them they can type "exit" to quit or use REPL commands like /clear, /cost, /compact, /memory, and /skills.
+
+# Workspace changes and verification
+ - If the user asks you to update, fix, modify, edit, create, remove, or otherwise change workspace files, apply the change with the appropriate file tool. Do not only show the updated content in your final answer.
+ - After modifying files, verify the final workspace state before reporting completion. Prefer relevant tests or focused commands when available; otherwise read back the changed file and check the relevant lines.
+ - For code fixes, keep verification proportional to the requested behavior. Prefer a focused check over broad new test scaffolding.
+ - For structured files such as JSON, YAML, or TOML, verify that the file remains parseable and that the requested fields were actually written.
+ - Do not create or leave extra files solely for verification unless the user requested tests or the project already expects that file.
+ - Your final response must be based on successful tool results, not intended changes.
 
 # Executing actions with care
 Carefully consider reversibility and blast radius. Local reversible actions like editing files and running tests are usually fine. For hard-to-reverse or externally visible actions, such as deleting files, force-pushing, modifying shared infrastructure, or sending messages, check with the user before proceeding. Authorization applies only to the scope specified.
@@ -125,6 +133,11 @@ def build_startup_context(
         f"Working directory: {cwd}.",
         f"Platform: {platform.system()} {platform.machine()}.",
         f"Shell: {shell}.",
+        "",
+        "Shell execution notes:",
+        "- Shell commands run from the working directory above unless the command changes directory.",
+        "- Prefer dedicated file/search tools over shell commands for repository inspection.",
+        "- Shell execution may be sandboxed; only rely on standard environment variables or variables explicitly provided by the user.",
     ]
     if git_context:
         lines.extend(["", "Git context:", git_context])
@@ -154,16 +167,6 @@ def build_prompt_bundle(cwd: Path | None = None, *, today: date | None = None) -
     )
 
 
-def load_claude_md() -> str:
-    """Compatibility wrapper returning rendered project instructions."""
-    return load_project_instructions(Path.cwd()).text
-
-
-def get_git_context() -> str:
-    """Compatibility wrapper returning the startup git snapshot."""
-    return collect_git_context(Path.cwd()).text
-
-
 # ─── 动态附件渲染 ────────────────────────────────
 
 
@@ -172,17 +175,6 @@ def render_system_reminder(title: str, body: str) -> str:
     if not body:
         return ""
     return f"<system-reminder>\n{title.strip()}\n\n{body}\n</system-reminder>"
-
-
-def render_memory_attachment(memories: list[object]) -> str:
-    if not memories:
-        return ""
-    lines = []
-    for memory in memories:
-        path = getattr(memory, "path", getattr(memory, "filename", "memory"))
-        content = getattr(memory, "content", "")
-        lines.append(f"Memory: {path}\n{content}")
-    return render_system_reminder("Relevant long-term memory.", "\n\n".join(lines))
 
 
 def render_skill_listing_attachment(skills: Iterable[object], sent: set[str]) -> tuple[str, set[str]]:

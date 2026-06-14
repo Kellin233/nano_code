@@ -1,35 +1,9 @@
-"""Skill prompt 相关的兼容函数和描述生成。
-
-本模块负责把 discovery 阶段得到的 skill metadata 渲染成 system prompt 片段，
-同时提供旧调用路径需要的 prompt 渲染和执行辅助函数。
-"""
+"""Skill prompt description rendering."""
 
 from __future__ import annotations
 
-from .registry import discover_skills, get_default_registry
-from .runtime import SkillInvocation
+from .registry import discover_skills
 from .types import SkillDefinition
-
-
-def resolve_skill_prompt(skill: SkillDefinition, args: str) -> str:
-    """渲染单个 skill 的 prompt，供兼容调用方直接使用。"""
-    return SkillInvocation(get_default_registry()).render_prompt(skill, args)
-
-
-def execute_skill(skill_name: str, args: str, invoked_by: str = "model") -> dict | None:
-    """通过默认 registry 调用 skill，并返回旧格式的字典结果。"""
-    invocation = SkillInvocation(get_default_registry()).invoke(skill_name, args, invoked_by)
-    if not invocation.ok:
-        return None
-    return {
-        "prompt": invocation.rendered_prompt,
-        "allowed_tools": invocation.allowed_tools,
-        "disallowed_tools": invocation.disallowed_tools,
-        "context": invocation.context,
-        "agent": invocation.agent,
-        "skill": invocation.skill,
-        "invocation": invocation,
-    }
 
 
 def _format_skill_invocation_modes(skill: SkillDefinition) -> str:

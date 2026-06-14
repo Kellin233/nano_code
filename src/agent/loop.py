@@ -11,6 +11,7 @@ import asyncio
 import contextlib
 import time
 from collections.abc import AsyncIterator, Awaitable, Callable
+from dataclasses import dataclass
 from typing import Any
 
 from .events import (
@@ -21,9 +22,18 @@ from .events import (
     ToolCallFinished,
     ToolCallStarted,
 )
-from .types import ToolCall, ToolResult
+from .types import ConversationHistory, ToolCall, ToolResult
 
 ExecuteTools = Callable[[list[ToolCall]], Awaitable[tuple[list[RuntimeEvent], list[tuple[ToolCall, ToolResult]]]]]
+CommitConversation = Callable[[str], Awaitable[None] | None]
+PrepareContext = Callable[[], Awaitable["PreparedContext"]]
+
+
+@dataclass(frozen=True)
+class PreparedContext:
+    conversation: ConversationHistory
+    changed: bool = False
+    reason: str = ""
 
 
 class AgentLoop:
@@ -35,23 +45,23 @@ class AgentLoop:
         backend: Any,
         *,
         execute_tools: ExecuteTools,
-        run_compression_pipeline: Callable[[], Awaitable[bool]] | None = None,
-        check_and_compact: Callable[[], Awaitable[None]] | None = None,
+        prepare_context_for_provider: PrepareContext | None = None,
         apply_user_prompt_hooks: Callable[[str], Awaitable[str]] | None = None,
         run_stop_hook: Callable[[str], Awaitable[bool]] | None = None,
+        commit_conversation: CommitConversation | None = None,
     ):
         self.agent = agent
         self.backend = backend
         self.execute_tools = execute_tools
-        self.run_compression_pipeline = run_compression_pipeline
-        self.check_and_compact = check_and_compact
+        self.prepare_context_for_provider = prepare_context_for_provider
         self.apply_user_prompt_hooks = apply_user_prompt_hooks
         self.run_stop_hook = run_stop_hook
+        self.commit_conversation = commit_conversation
         self._agent_started = False
 
     @property
     def use_openai(self) -> bool:
-        return bool(self.agent.config.use_openai)
+        return bool(self.agent.use_openai)
 
     async def run(self, user_message: str) -> AsyncIterator[RuntimeEvent]:
         agent = self.agent
@@ -72,23 +82,21 @@ class AgentLoop:
             agent.prepare_initial_attachments()
             agent.flush_pending_attachments()
             agent.add_user_message(prompt)
+            await self._commit_conversation("user_accepted")
 
             await agent.ensure_mcp_initialized()
-
-            if self.check_and_compact is not None:
-                await self.check_and_compact()
-
-            memory_prefetch = agent.start_memory_prefetch(prompt)
 
             while True:
                 if agent.aborted:
                     yield LoopFinished("aborted")
                     return
 
-                if self.run_compression_pipeline is not None:
-                    await self.run_compression_pipeline()
-
-                agent.consume_memory_prefetch(memory_prefetch)
+                request_conversation = agent.conversation
+                if self.prepare_context_for_provider is not None:
+                    prepared = await self.prepare_context_for_provider()
+                    request_conversation = prepared.conversation
+                    if prepared.changed:
+                        await self._commit_conversation(prepared.reason or "context_prepared")
 
                 thinking_mode = self.backend.resolve_thinking_mode(agent.thinking)
                 try:
@@ -99,7 +107,7 @@ class AgentLoop:
 
                     call_task = asyncio.create_task(
                         self.backend.call(
-                            messages=agent.messages,
+                            conversation=request_conversation,
                             system=agent.system_prompt,
                             tools=agent.tool_definitions(),
                             on_text_delta=on_text_delta,
@@ -149,9 +157,11 @@ class AgentLoop:
                 )
 
                 self._append_assistant_message(response)
+                await self._commit_conversation("assistant_final")
 
                 if not response.tool_calls:
                     if self.run_stop_hook is not None and await self.run_stop_hook(response.text):
+                        await self._commit_conversation("stop_hook_context")
                         continue
                     yield LoopFinished("stop")
                     return
@@ -174,7 +184,6 @@ class AgentLoop:
                     yield ToolCallFinished(call, result)
 
                 self._append_tool_results(results)
-
                 for _, result in results:
                     for msg in getattr(result, "extra_messages", []):
                         content = msg.get("content")
@@ -182,56 +191,19 @@ class AgentLoop:
                             agent.append_user_context(content)
 
                 agent.flush_pending_attachments()
+                await self._commit_conversation("tool_results")
         finally:
             await agent.emit(agent._on_turn_end, RuntimeEvent("turn.end", {"text": user_message}))
 
     def _append_assistant_message(self, response) -> None:
-        if self.use_openai:
-            tool_calls = None
-            if response.tool_calls:
-                tool_calls = [
-                    {
-                        "id": tc.id,
-                        "type": "function",
-                        "function": {"name": tc.name, "arguments": ""},
-                    }
-                    for tc in response.tool_calls
-                ]
-            msg: dict = {"role": "assistant", "content": response.text or None}
-            if tool_calls:
-                msg["tool_calls"] = tool_calls
-            self.agent._openai_messages.append(msg)
-            return
-
-        content: list[dict] = []
-        if response.text:
-            content.append({"type": "text", "text": response.text})
-        for tc in response.tool_calls:
-            content.append({
-                "type": "tool_use",
-                "id": tc.id,
-                "name": tc.name,
-                "input": tc.input,
-            })
-        self.agent._anthropic_messages.append({"role": "assistant", "content": content})
+        self.agent.add_assistant_message(response.text or "", response.tool_calls)
 
     def _append_tool_results(self, results: list[tuple[ToolCall, ToolResult]]) -> None:
-        if self.use_openai:
-            for call, result in results:
-                self.agent._openai_messages.append({
-                    "role": "tool",
-                    "tool_call_id": call.id,
-                    "content": result.content,
-                })
-            return
+        self.agent.add_tool_results(results)
 
-        tool_results = []
-        for call, result in results:
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": call.id,
-                "content": result.content,
-                **({"is_error": True} if result.is_error else {}),
-            })
-        if tool_results:
-            self.agent._anthropic_messages.append({"role": "user", "content": tool_results})
+    async def _commit_conversation(self, reason: str) -> None:
+        if self.commit_conversation is None:
+            return
+        result = self.commit_conversation(reason)
+        if hasattr(result, "__await__"):
+            await result  # type: ignore[misc]
