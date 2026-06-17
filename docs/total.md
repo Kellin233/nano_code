@@ -1,6 +1,6 @@
-# nanoCode 重构方案 v6
+# nanoCode 当前架构总览 v6
 
-> 历史设计稿。当前实现以 `00-introduction.md`、`01-runtime.md`、`12-cli-tui-session.md` 和 `13-architecture.md` 为准。
+> 当前实现说明。本文保留原重构方案的结构，但所有目录、接口和落地状态均按当前 `src/`、`benchmarks/local-fixture` 和 `pyproject.toml` 修正。
 
 > 吸取 pi 的分层思想（4 层、依赖单向、内核不感知应用），保留 nanoCode 自身设计（Hook + Extension 互补、Python 惯例、单应用尺度）。
 > 2026-06-10
@@ -48,12 +48,12 @@
 │  │                                                               │   │
 │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐        │   │
 │  │  │ cli/     │ │ tui/     │ │ server/  │ │ protocol/│        │   │
-│  │  │ 入口+会话│ │ 终端 UI  │ │ HTTP/WS  │ │ JSONL    │        │   │
+│  │  │ 入口+会话│ │ 终端 UI  │ │ stdio    │ │ JSONL    │        │   │
 │  │  └──────────┘ └──────────┘ └──────────┘ └──────────┘        │   │
 │  │                                                               │   │
 │  │  ┌──────────────────────────────────────────────────────┐    │   │
 │  │  │  能力模块: tools/ sandbox/ skills/ memory/ mcp/      │    │   │
-│  │  │             server/ protocol/ extensions/            │    │   │
+│  │  │             server/ protocol/ extensions/ project/    │    │   │
 │  │  └──────────────────────────────────────────────────────┘    │   │
 │  │                                                               │   │
 │  │  pi 对应: grain-ai-agent-headless + grain-ai-agent-tui        │   │
@@ -99,16 +99,17 @@
 ### 1.2 依赖方向
 
 ```
-cli/ ──→ agent/harness/ ──→ agent/
-cli/ ──→ agent/              (直接使用 Agent/Types/Events/AgentConfig)
-cli/ ──→ providers/ ──→ agent/types.py
-cli/ ──→ cli/core/
-tui/ ──→ cli/session.py
+cli/session.py ──→ agent/harness/ ──→ agent/
+cli/session.py ──→ agent/              (直接使用 Agent/Types/Events/AgentConfig)
+cli/session.py ──→ providers/ ──→ agent/types.py + agent/models.py
+cli/session.py ──→ cli/core/
+tui/ ───────────→ cli/session.py / cli/thread.py
+cli/core/server ─→ cli/thread.py
 ```
 
 配置对象分层：
 
-- `agent/agent.py` 只定义 `AgentConfig`，字段限于 Agent core 必须知道的状态机参数：`model`、`message_format`、`thinking`、`max_cost_usd`、`max_turns`。
+- `agent/agent.py` 只定义 `AgentConfig`，字段限于 Agent core 必须知道的状态机参数：`model`、`message_format`、`thinking`、`max_cost_usd`、`max_turns`、`context_window`。
 - `cli/config.py` 定义 `RuntimeConfig`，持有 provider、API、permission、sandbox、workspace、sub-agent、自定义 system prompt 等应用层装配参数。
 - `AgentSession` 负责调用 `RuntimeConfig.to_agent_config()`，并把最终 system prompt、startup context、workspace、persistence、tools、memory、hooks 等运行对象装配到对应层。
 
@@ -120,7 +121,7 @@ agent/core (agent.py, loop.py, events.py, types.py, models.py, budget.py)
 agent/harness/    ← 允许 I/O（文件读写、subprocess）, 依赖 agent/
                      不引用 cli/、tui/、providers/
                      需要 LLM 摘要时由 cli/session.py 注入 callable
-providers/        ← 只依赖 agent/types.py
+providers/        ← 只依赖 agent/types.py、agent/models.py 和 provider SDK
 cli/              ← 依赖 agent/ + harness/ + providers/ + cli/core/
 tui/              ← 依赖 cli/session.py
 ```
@@ -151,7 +152,7 @@ tui/              ← 依赖 cli/session.py
 
 ---
 
-## 二、目标目录结构
+## 二、当前目录结构
 
 > 所有模块在 `src/` 下，当前 `pyproject.toml` 的 `package-dir = {"nanocode" = "src"}` 不变。
 
@@ -178,8 +179,8 @@ nanocode/
     │   │
     │   └── harness/                     # 框架层: "怎么运转" (允许 I/O, 不引用 cli/、tui/ 或 providers/)
     │       ├── __init__.py
-    │       ├── compressor.py            # 多层压缩 (用 MessageView, 去 tui 依赖)
-    │       ├── message_view.py          # 双后端消息统一读/写视图
+    │       ├── compressor.py            # Tool History Snip / Context Compact
+    │       ├── message_view.py          # canonical conversation 工具结果读/写视图
     │       ├── approvals.py             # 确认管理 (yolo/ask/deny)
     │       ├── context/                 # 系统提示词 + 启动上下文
     │       │   ├── __init__.py
@@ -187,6 +188,7 @@ nanocode/
     │       │   └── sources.py           # AGENTS.md / .nanocode/rules / Git / frontmatter
     │       ├── persistence/             # 会话与运行工件持久化
     │       │   ├── __init__.py
+    │       │   ├── atomic.py            # durable atomic write / JSONL append
     │       │   ├── session_log.py       # durable session.jsonl checkpoint/resume
     │       │   ├── session_store.py     # session discovery / load derived snapshot / latest
     │       │   ├── artifacts.py         # 大结果 artifact store
@@ -197,6 +199,7 @@ nanocode/
     │       │   ├── __init__.py
     │       │   ├── policy.py
     │       │   ├── rules.py
+    │       │   ├── tool_policy.py
     │       │   ├── workspace.py
     │       │   └── shell.py
     │       └── hooks/                   # Hook 管理 (外部 subprocess)
@@ -219,10 +222,11 @@ nanocode/
     │       ├── tools/                   # 内置工具
     │       │   ├── types.py             # ToolContext, FunctionTool, ToolMetadata (从 agent/types.py import 核心类型)
     │       │   ├── builtin.py
+    │       │   ├── recent_files.py
     │       │   ├── registry.py          # ToolRegistry
     │       │   └── runtime.py           # ToolRuntime (扩展的 before/after_tool_call 在此触发)
-    │       ├── sandbox/
-    │       ├── skills/
+    │       ├── sandbox/                 # config/types/manager/bwrap/microsandbox
+    │       ├── skills/                  # registry/runtime/prompt/types
     │       ├── project/                 # ProjectScope: 项目身份和项目级数据目录
     │       │   ├── __init__.py
     │       │   └── identity.py
@@ -231,11 +235,11 @@ nanocode/
     │       │   ├── types.py
     │       │   ├── store.py
     │       │   └── runtime.py           # ★ MemoryRuntime: system prompt + startup context + 显式写入
-    │       ├── mcp/
-    │       ├── subagents/
-    │       ├── server/
-    │       ├── protocol/
-    │       └── extensions/              # 插件系统 (后续实现)
+    │       ├── mcp/                     # stdio MCP 连接、工具注册、资源读取
+    │       ├── subagents/               # built-in/custom agent + orchestrator
+    │       ├── server/                  # stdio JSONL server；unix/websocket 是占位
+    │       ├── protocol/                # JSONL protocol dispatcher
+    │       └── extensions/              # 进程内 Python 扩展系统
     │           ├── __init__.py
     │           ├── api.py
     │           ├── loader.py
@@ -292,7 +296,7 @@ Loop 只看到一个 `execute_tools` 可调用对象，不知道它内部是 Too
 - **持有运行状态**：workspace、permission 确认缓存、ArtifactStore、RunStore、active skills、tool registry、sandbox、MCP、hook manager 等应用对象均在 AgentSession，而不进入 Agent core
 - **暴露公共接口**：`chat()`、`compact()`、`abort()`、`clear_history()`、`show_cost()` 等，CLI 和 TUI 共用
 
-这取代了当前 `cli/main.py` 中的 `_TuiAgentAdapter` 胶水类和 `runtime/thread.py` 中的重复装配代码。
+当前实现中，`cli/main.py`、TUI 和 server 都通过 `create_session()` / `RuntimeThread` 复用这一个装配点，不再保留入口侧重复装配。
 
 ### 3.2.1 Agent core 纯化边界
 
@@ -348,7 +352,7 @@ Loop 只看到一个 `execute_tools` 可调用对象，不知道它内部是 Too
 - `trace.jsonl`：pico-style 过程事件流，记录 `run_started`、`assistant_delta`、`tool_started`、`tool_executed`、`budget_exceeded`、`runtime_error`、`run_finished`。
 - `report.json`：最终摘要，记录运行状态、工具统计、token/cost、runtime 信息和最终答案。
 
-`AgentLoop` 仍保持纯状态机，不 import persistence，也不做文件 I/O。`cli/session.py` 作为装配层消费 `RuntimeEvent` 流并调用 `RunStore` 落盘；这样 one-shot、TUI、server 每次用户请求都能生成一致的 run artifacts。方案 4 的本地 fixture benchmark 以单 run 为默认评测单位，后续可聚合同一 session 下多个 run 支持 multi-turn benchmark。
+`AgentLoop` 仍保持纯状态机，不 import persistence，也不做文件 I/O。`cli/session.py` 作为装配层消费 `RuntimeEvent` 流并调用 `RunStore` 落盘；这样 one-shot、TUI、server 每次用户请求都能生成一致的 run artifacts。`benchmarks/local-fixture` 以单 run 为默认评测单位，并通过 session log / run trace / report 验证 resume、context governance、permission 和 artifact 合同。
 
 Benchmark runner 不需要传 `--trace-out` 或 `--report-out`。它只需要执行一次普通 nanocode 请求，然后从 workspace 的 `.nanocode/runs/<run_id>/` 读取固定两件套。
 
@@ -357,23 +361,23 @@ Benchmark runner 不需要传 `--trace-out` 或 `--report-out`。它只需要执
 大工具结果持久化由 `ToolRuntime` 通过 callback 注入：
 
 - `ToolRuntime` 不持有 `Agent`，也不读取 `_tool_results_dir`。
-- `AgentSession` 创建 `ArtifactStore`，把 `ArtifactStore.write_tool_result` 作为 `persist_large_result` 传给 `ToolRuntime`。
+- `AgentSession` 创建 `ArtifactStore`，在 `context_governance != "off"` 时把 `ArtifactStore.write_tool_result` 作为 `persist_large_result` 传给 `ToolRuntime`。
 - `ArtifactStore` 写入 `<workspace>/.nanocode/artifacts/tool-results/<call_id>.txt`，并返回 path、size、sha256 等 metadata。
 - `ToolRuntime` 只负责把超大结果替换成 `<persisted-output>` 预览，并把 artifact metadata 写进 `ToolResult.metadata`。
 
 这样 artifact I/O 属于 harness persistence，tool 执行管线通过窄 callback 使用它，不把 Agent core 重新耦合进来。
 
-### 3.5 MessageView 消除 compressor 双后端分支
+### 3.5 MessageView 统一工具结果读写
 
-compressor 中 Anthropic/OpenAI 消息格式差异导致 ~150 行重复逻辑。`harness/message_view.py` 提供不统一格式、只统一读写方式的视图层：
+当前 conversation 已经是 provider-neutral 结构。`harness/message_view.py` 提供一个小型读写视图，避免 compressor 在多个地方手写遍历 `ConversationMessage` / `ToolResultBlock`：
 
-- `iter_tool_results()` → 遍历所有工具结果，屏蔽 Anthropic content block 和 OpenAI tool role 消息的差异
+- `iter_tool_results()` → 遍历所有 canonical 工具结果 block
 - `set_content()` → 修改指定工具结果的 content
 - `iter_tool_uses()` → 建立 tool_use_id → tool_name 索引
 
-compressor 各层从"两个分支"变成"一个循环"，预期从 443 行降到 ~250 行。
+compressor 各层保持为一个循环：Tool History Snip 通过 `MessageView.iter_tool_results()` 找到可裁剪结果，并用 `ToolResultSlot.set_content()` 原地替换内容。
 
-LLM 摘要调用（collapse/compact）不在 harness 中 import provider 实现；`cli/session.py` 根据 Backend 构造 `summarize_messages()` callable 注入 compressor。
+LLM 摘要调用不在 harness 中 import provider 实现；`cli/session.py` 根据 Backend 构造 `summarize_messages()` callable 注入 compressor。
 
 ### 3.6 Hook 和 Extension 互补，不互相替代
 
@@ -396,50 +400,39 @@ Hook 覆盖"执行前拦截确认"的简单场景（30%），Extension 覆盖"�
 
 ---
 
-## 四、重构计划（2 个 Phase）
+## 四、落地状态（原 2 个 Phase）
 
-旧代码存在 4 个结构性问题，本方案要求重构后持续避免这些问题回流：
-1. 核心层反向依赖表现层（例如 `agent.py` → `tui.renderer`）
-2. compressor 双后端代码重复（每个操作写两遍）
-3. `_TuiAgentAdapter` 胶水类 + 装配逻辑重复（`main.py` 和 `thread.py` 各一套）
-4. `src/` 目录平铺，能力和框架混在一起
+原重构计划针对 4 个结构性问题：核心层反向依赖表现层、compressor 消息遍历重复、入口装配重复、能力与框架混在一起。当前实现已经完成目录迁移和扩展系统落地，本节按原 Phase 结构记录“现在代码中如何体现”，后续维护时用它检查是否回退。
 
-两个 Phase 解决它们：
+### Phase 1：分层修复 + 接口建立（已落地）
 
-### Phase 1：修复分层 + 建立接口
+| 项目 | 当前实现 | 对应约束 |
+|------|----------|:---:|
+| 去除反向依赖 | `agent/agent.py`、`agent/loop.py`、`agent/models.py`、`agent/harness/compressor.py` 不 import `tui`、`cli` 或 provider SDK。状态展示通过 `RuntimeEvent`、callback 和上层 renderer 完成 | C1, C2 |
+| Agent 回调槽位 | `Agent.set_callbacks()` 填入 agent/turn 生命周期和 before/after tool 回调；`AgentLoop` 触发生命周期事件，工具拦截由 `ToolRuntime` 触发 | C1, C3 |
+| `cli/session.py` 装配点 | `AgentSession` 创建 Agent、Backend、ToolRegistry、SandboxManager、McpManager、SkillInvocation、MemoryRuntime、HookManager、ExtensionRunner、Compressor、RunStore、SessionLog、ArtifactStore 和 AgentLoop | C3 |
+| `message_view.py` | `ToolResultSlot` / `MessageView` 遍历 canonical conversation 工具结果，供 Tool History Snip 原地替换旧结果 | — |
+| compressor | `Compressor.prepare_context_for_provider()` 先 Tool History Snip，再按阈值 Context Compact；摘要 callable 和 post-compact recovery callable 由 `AgentSession` 注入 | C2, C3 |
+| 装配逻辑收敛 | `cli/main.py`、TUI、server 都复用 `create_session()` 或 `RuntimeThread`，不会在入口侧各自组装工具/MCP/memory | C3 |
+| 轻量本地记忆 | `cli/core/project/identity.py` 计算 ProjectScope；`cli/core/memory/` 管理 `~/.nanocode/projects/<repo_key>/memory/` 下的 `MEMORY.md` 和三个 topic 文件；不做向量召回、后台抽取或文件事实缓存 | C2, C3 |
+| system prompt 模板 | 当前 `STABLE_SYSTEM_PROMPT` 仍在 `agent/harness/context/builder.py`，并通过 `SYSTEM_PROMPT_DYNAMIC_BOUNDARY` 允许 memory 规则等动态插入 | C2 |
+| 运行工件持久化 | `SessionLog` 写 `~/.nanocode/sessions/<session_id>/session.jsonl`；`RunStore` 写 `<workspace>/.nanocode/runs/<run_id>/trace.jsonl` 和 `report.json`；`ArtifactStore` 写大工具结果 | C2, C3 |
+| Agent core 纯化 | `AgentConfig` 只含 core 参数；workspace、permission、sandbox、MCP、skills、memory、extensions、persistence 都由 `AgentSession` 或 `cli/core` 对象持有 | C1, C3 |
 
-**目标**：代码结构先"对"，再"搬家"。新建文件直接放在 `src/` 下目标路径，旧文件暂不移动。
+**当前验证口径**：`python -m compileall -q src`、`PYTHONPATH=src python -m unittest discover -s test`、`ruff check src test`，以及 `benchmarks/local-fixture` 的本地 fixture 合同。
 
-| 任务 | 说明 | 对应约束 |
-|------|------|:---:|
-| 1a. 去除反向依赖 | `agent.py`、`models.py`、`compressor.py` 全部去掉 `tui.renderer` import。状态输出改用回调或返回结果，由 `cli/session.py` 或 TUI 决定展示方式 | C1, C2 |
-| 1b. Agent 暴露回调槽位 | `agent.py` 加 6 个 `_on_*` 属性（空槽位，等待 Phase 2 填入）。`loop.py` 触发 4 个生命周期事件；`loop.py` **不 import ToolRuntime**，改为接受注入的 `execute_tools(calls) → results` 回调 | C1, C3 |
-| 1c. 创建 `cli/session.py` | AgentSession 类：装配 Agent+Backend，暴露公共接口。创建 ToolRuntime 并注入 `before_tool_call` / `after_tool_call` 回调。扩展桥接暂用占位 | — |
-| 1d. 创建 `agent/harness/message_view.py` | MessageView + ToolResultSlot，统一双后端消息读写 | — |
-| 1e. 重写 compressor | 用 MessageView 消除 `if self.use_openai` 分支 | — |
-| 1f. 收敛装配逻辑 | `main.py` 删除 `_TuiAgentAdapter`，`thread.py` 改为调用 `create_session()` | — |
-| 1g. 接入轻量本地记忆 | `cli/core/project/identity.py` 统一计算 ProjectScope / repo key / 项目级数据目录；`cli/core/memory/` 只管理 `~/.nanocode/projects/<repo_key>/memory/` 下的 `MEMORY.md`、`preferences.md`、`project.md`、`debugging.md`。MemoryRuntime 负责 system prompt 规则、startup context 和显式 `/remember` 写入；不做语义召回、后台提取、文件摘要或 ReadFileTracker | C2, C3 |
-| 1h. system prompt 模板化 | `context/builder.py` 中的 `STABLE_SYSTEM_PROMPT` 移到 `agent/harness/context/prompt_template.txt` | — |
-| 1i. 接入运行工件持久化 | 在 `agent/harness/persistence/` 增加 `SessionLog`、`RunStore`、内存 `TaskState`、report 构建；`AgentSession.run(prompt)` 包装事件流，默认写 `~/.nanocode/sessions/<session_id>/session.jsonl` 和 `<workspace>/.nanocode/runs/<run_id>/{trace.jsonl,report.json}`，供 resume 与方案 4 本地 fixture benchmark 使用 | C2, C3 |
-| 1j. Agent core 纯化 | 新建 `cli/config.py`，把 `RuntimeConfig` 放在应用层；`agent/agent.py` 改为 `AgentConfig(message_format=...)`；workspace/path/tool-result/read-file/app-object 状态全部移到 `AgentSession`；`ToolRuntime` 用 artifact callback；`ToolContext` 改为窄接口 | C1, C3 |
+### Phase 2：目录迁移 + 扩展系统 + 接口补齐（已落地）
 
-**验证**：编译检查 + 全部单元测试。Phase 1 后所有文件仍在 `src/` 下，`pip install -e .` 正常。
+| 项目 | 当前实现 | 对应约束 |
+|------|----------|:---:|
+| 目录迁移 | 当前包结构已经是 `agent/`、`agent/harness/`、`providers/`、`cli/`、`cli/core/`、`tui/`；旧的 `runtime`、`backend`、`capabilities` 包不在 `src/` 中 | C3 |
+| import 更新 | `pyproject.toml` 只声明当前 `nanocode.agent.*`、`nanocode.cli.core.*`、`nanocode.providers`、`nanocode.tui` 等包名 | C3 |
+| ToolRegistry 接口 | `ToolRegistry.register()` 支持扩展注册单个工具；`ToolOrigin` 包含 `builtin`、`mcp`、`custom`、`extension` | — |
+| Extension 系统 | `cli/core/extensions/api.py`、`loader.py`、`runner.py` 已实现；`AgentSession` 加载 `.nanocode/extensions/*.py` 并桥接生命周期、before/after tool 和扩展命令 | — |
+| MCP/Server/Protocol | MCP 实现 stdio transport，HTTP/SSE/WS 只诊断跳过；server 当前 CLI 只开放 `--server stdio`，unix socket 和 websocket transport 文件是占位 | C5 |
+| Benchmark 固化 | `benchmarks/local-fixture/tasks.json` 当前 41 个任务，覆盖编辑、权限、安全、resume、memory、context governance 和 run artifacts | C5, C6 |
 
-### Phase 2：目录迁移 + 扩展系统 + 接口补齐
-
-**目标**：迁移旧文件到目标结构，实现扩展系统，补齐接口缺口。所有文件仍在 `src/` 下。
-
-| 任务 | 说明 | 对应约束 |
-|------|------|:---:|
-| 2a. 创建目标目录 | 按 [二、目标目录结构](#二目标目录结构) 完善目录。Phase 1 已建的文件就地保留，补建其余目录 | — |
-| 2b. 迁移旧文件 | 将 `src/` 下剩余文件按映射表搬移到新目录（见 [附录](#附录文件迁移映射)） | — |
-| 2c. 更新全部 import | 全局替换 import 路径。一次性完成，避免中间状态 | C3 |
-| 2d. 更新 pyproject.toml | 更新 `[tool.setuptools].packages`：删除旧包名（`nanocode.backend`、`nanocode.runtime`、`nanocode.capabilities.*`），加入新包名（`nanocode.agent`、`nanocode.agent.harness`、`nanocode.agent.harness.context`、`nanocode.agent.harness.persistence`、`nanocode.agent.harness.permissions`、`nanocode.agent.harness.hooks`、`nanocode.providers`、`nanocode.cli`、`nanocode.cli.core`、`nanocode.cli.core.tools`、`nanocode.cli.core.sandbox`、`nanocode.cli.core.skills`、`nanocode.cli.core.memory`、`nanocode.cli.core.mcp`、`nanocode.cli.core.subagents`、`nanocode.cli.core.server`、`nanocode.cli.core.server.transports`、`nanocode.cli.core.protocol`、`nanocode.cli.core.extensions`、`nanocode.tui`）。入口 `nanocode.cli.main:main` 不变 | — |
-| 2e. 实现扩展系统 | 在 `cli/core/extensions/` 实现 api.py + loader.py + runner.py（~260 行）。AgentSession 的桥接代码（Phase 1 占位）填实 | — |
-| 2f. 补齐 ToolRegistry 接口 | ToolRegistry 新增单条注册方法；`ToolOrigin` 增加 `"extension"` 字面量 | — |
-| 2g. 附带示例插件 | danger_guard.py、todo_writer.py，各 ≤40 行 | — |
-
-**验证**：编译检查 + 全部测试 + `pip install -e .`。
+**当前验证口径**：除了单元测试，还要看 fixture verifier 和 run artifacts。失败排查顺序通常是 `<workspace>/.nanocode/runs/<run_id>/report.json` → `trace.jsonl` → 对应 fixture 的 verifier。
 
 ---
 
@@ -456,105 +449,120 @@ Hook 覆盖"执行前拦截确认"的简单场景（30%），Extension 覆盖"�
 
 ---
 
-## 附录：文件迁移映射
+## 附录：当前文件清单与维护映射
 
-> 当前 `src/` 下 82 个 .py 文件 → 目标结构。
+> 当前 `src/` 下有 97 个 Python 源文件（不含 `__pycache__` 和 `nanocode.egg-info`）。`pyproject.toml` 的 `[tool.setuptools].packages` 已按这些包名声明。
 
 ### 根级
 
-| 当前 | 目标 | 说明 |
-|------|------|------|
-| `src/__init__.py` | `src/__init__.py` | 包根保留 |
+| 当前文件 | 说明 |
+|------|------|
+| `src/__init__.py` | 包根 |
 
 ### providers/ (4 文件)
 
-| 当前 | 目标 |
+| 当前文件 | 说明 |
 |------|------|
-| `src/backend/__init__.py` | `providers/__init__.py` |
-| `src/backend/base.py` | `providers/base.py` |
-| `src/backend/anthropic.py` | `providers/anthropic.py` |
-| `src/backend/openai.py` | `providers/openai.py` |
+| `src/providers/__init__.py` | `create_backend()` 工厂 |
+| `src/providers/base.py` | `Backend` / `BackendResponse` / `TokenUsage` |
+| `src/providers/anthropic.py` | Anthropic Messages API 流式后端 |
+| `src/providers/openai.py` | OpenAI-compatible Chat Completions 流式后端 |
 
-### agent/ (7 文件, 含 1 新建)
+### agent/ (7 文件)
 
-| 当前 | 目标 | 说明 |
+| 当前文件 | 说明 |
+|------|------|
+| `src/agent/__init__.py` | Agent 包入口 |
+| `src/agent/agent.py` | `AgentConfig`、Agent 状态容器、回调槽位 |
+| `src/agent/loop.py` | provider-neutral LLM/tool 状态机 |
+| `src/agent/events.py` | RuntimeEvent 工厂函数和 `TurnResult` |
+| `src/agent/types.py` | `ToolDef`、`ToolCall`、`ToolResult`、Conversation、RuntimeEvent |
+| `src/agent/models.py` | 模型窗口、thinking 能力、retry、schema helper |
+| `src/agent/budget.py` | token 估算和费用估算 |
+
+### agent/harness/ (25 文件)
+
+| 当前文件或目录 | 说明 |
+|------|------|
+| `src/agent/harness/__init__.py` | harness public exports |
+| `src/agent/harness/approvals.py` | approval request/decision 管理 |
+| `src/agent/harness/compressor.py` | Tool History Snip / Context Compact |
+| `src/agent/harness/message_view.py` | canonical conversation 工具结果视图 |
+| `src/agent/harness/context/` | system prompt、startup context、project instructions、Git snapshot |
+| `src/agent/harness/hooks/` | Hook 类型、settings loader、外部命令 runner |
+| `src/agent/harness/permissions/` | policy、rules、shell、workspace、tool allowlist |
+| `src/agent/harness/persistence/` | atomic、session log/store、run store、task state、report、artifact |
+
+细分文件：
+
+```text
+agent/harness/context/{__init__.py,builder.py,sources.py}
+agent/harness/hooks/{__init__.py,config.py,runner.py,types.py}
+agent/harness/permissions/{__init__.py,policy.py,rules.py,shell.py,tool_policy.py,workspace.py}
+agent/harness/persistence/{__init__.py,artifacts.py,atomic.py,report.py,run_store.py,session_log.py,session_store.py,task_state.py}
+```
+
+### cli/ (7 文件)
+
+| 当前文件 | 说明 |
+|------|------|
+| `src/cli/__init__.py` | CLI 包入口 |
+| `src/cli/main.py` | CLI 入口，一次性/TUI/server 模式选择 |
+| `src/cli/args.py` | argparse、环境变量和 RuntimeConfig 构造 |
+| `src/cli/config.py` | `RuntimeConfig` |
+| `src/cli/session.py` | `AgentSession` 总装配点 |
+| `src/cli/thread.py` | `RuntimeThread` event-stream wrapper |
+| `src/cli/logging_config.py` | logging helper |
+
+### cli/core/ (46 文件的能力层主体)
+
+| 子包 | 文件 | 说明 |
 |------|------|------|
-| `src/runtime/__init__.py` | `agent/__init__.py` | |
-| `src/runtime/agent.py` | `agent/agent.py` | 暴露回调槽位 |
-| `src/runtime/loop.py` | `agent/loop.py` | 生命周期事件 + 注入 `execute_tools` 回调 |
-| `src/runtime/events.py` | `agent/events.py` | |
-| — | `agent/types.py` | 新建：核心类型 ToolDef / ToolCall / ToolResult / RuntimeEvent |
-| `src/models.py` | `agent/models.py` | 去 tui 依赖 |
-| `src/pricing.py` | `agent/budget.py` | |
-
-### agent/harness/ (23 文件, 含 6 新建)
-
-| 当前 | 目标 | 说明 |
-|------|------|------|
-| `src/runtime/compressor.py` | `agent/harness/compressor.py` | 用 MessageView, 去 tui 依赖 |
-| `src/runtime/approvals.py` | `agent/harness/approvals.py` | |
-| `src/context/__init__.py` | `agent/harness/context/__init__.py` | |
-| `src/context/builder.py` | `agent/harness/context/builder.py` | |
-| `src/context/sources.py` | `agent/harness/context/sources.py` | |
-| `src/session/__init__.py` | `agent/harness/persistence/session_store.py` | session discovery / load_session / list_sessions |
-| `src/session/artifacts.py` | `agent/harness/persistence/artifacts.py` | |
-| — | `agent/harness/persistence/__init__.py` | 新建 |
-| — | `agent/harness/persistence/session_log.py` | 新建：durable session checkpoint/resume |
-| — | `agent/harness/persistence/run_store.py` | 新建：单次请求 trace/report 落盘 |
-| — | `agent/harness/persistence/task_state.py` | 新建：单次请求内存状态 |
-| — | `agent/harness/persistence/report.py` | 新建：run report 构建与汇总指标 |
-| `src/capabilities/permissions/__init__.py` | `agent/harness/permissions/__init__.py` | |
-| `src/capabilities/permissions/policy.py` | `agent/harness/permissions/policy.py` | |
-| `src/capabilities/permissions/rules.py` | `agent/harness/permissions/rules.py` | |
-| `src/capabilities/permissions/workspace.py` | `agent/harness/permissions/workspace.py` | |
-| `src/capabilities/permissions/shell.py` | `agent/harness/permissions/shell.py` | |
-| `src/capabilities/hooks/` (4 文件) | `agent/harness/hooks/` (4 文件) | |
-| — | `agent/harness/__init__.py` | 新建 |
-| — | `agent/harness/message_view.py` | 新建 |
-
-### cli/ (6 文件)
-
-| 当前 | 目标 | 说明 |
-|------|------|------|
-| `src/cli/__init__.py` | `cli/__init__.py` | |
-| `src/cli/main.py` | `cli/main.py` | 无 Adapter |
-| `src/cli/args.py` | `cli/args.py` | |
-| `src/runtime/thread.py` | `cli/thread.py` | |
-| `src/logging_config.py` | `cli/logging_config.py` | |
-| — | `cli/session.py` | AgentSession 新建 |
-
-### cli/core/ (44 文件, 含 6 新建)
-
-| 当前 | 目标 | 说明 |
-|------|------|------|
-| `src/capabilities/tools/` (5 文件) | `cli/core/tools/` (5 文件) | types.py 从 agent/types.py import 核心类型（ToolDef 等），本文件只放 ToolContext / FunctionTool / ToolMetadata |
-| `src/capabilities/sandbox/` (7 文件) | `cli/core/sandbox/` (6 文件) | backend.py 合并到 types.py |
-| `src/capabilities/skills/` (5 文件) | `cli/core/skills/` (5 文件) | |
-| — | `cli/core/project/` (identity) | ProjectScope、项目身份和项目级数据目录 |
-| `src/capabilities/memory/` | `cli/core/memory/` (paths/types/store/runtime) | 轻量本地 markdown 记忆；paths.py 不重复计算 repo key |
-| — | `cli/core/memory/runtime.py` | **新建**: MemoryRuntime — system prompt + startup context + 显式写入 |
-| `src/capabilities/mcp/` (8 文件) | `cli/core/mcp/` (7 文件) | resources.py 合并到 types.py |
-| `src/capabilities/subagents/` (2 文件) | `cli/core/subagents/` (2 文件) | |
-| `src/server/` (6 文件) | `cli/core/server/` (6 文件) | 含 transports/ 子包 |
-| `src/protocol/` (3 文件) | `cli/core/protocol/` (2 文件) | dispatcher.py 合并到 messages.py |
-| — | `cli/core/__init__.py` | 新建 |
-| — | `cli/core/extensions/` (4 文件) | Phase 2e 新建 |
+| `extensions` | `__init__.py`、`api.py`、`loader.py`、`runner.py` | Python `.py` 扩展、工具注册、事件分发 |
+| `mcp` | `__init__.py`、`config.py`、`connection.py`、`manager.py`、`output.py`、`transport.py`、`types.py` | stdio MCP、工具聚合、资源读取、输出保存 |
+| `memory` | `__init__.py`、`paths.py`、`runtime.py`、`store.py`、`types.py` | Markdown topic memory |
+| `project` | `__init__.py`、`identity.py` | ProjectScope、repo key、项目级数据目录 |
+| `protocol` | `__init__.py`、`messages.py` | JSONL protocol request/response/dispatcher |
+| `sandbox` | `__init__.py`、`bwrap_backend.py`、`config.py`、`manager.py`、`microsandbox_backend.py`、`types.py` | shell sandbox config/backend/manager |
+| `server` | `__init__.py`、`app_server.py`、`transports/{__init__.py,stdio.py,unix_socket.py,websocket.py}` | headless server；当前可用 transport 是 stdio |
+| `skills` | `__init__.py`、`prompt.py`、`registry.py`、`runtime.py`、`types.py` | SKILL.md discovery、invocation、active skill |
+| `subagents` | `__init__.py`、`orchestrator.py` | built-in/custom 子 Agent 和 fork-return 编排 |
+| `tools` | `__init__.py`、`builtin.py`、`recent_files.py`、`registry.py`、`runtime.py`、`types.py` | 内置工具、ToolRegistry、ToolRuntime、compact 恢复辅助 |
 
 ### tui/ (7 文件)
 
-| 当前 | 目标 |
+| 当前文件 | 说明 |
 |------|------|
-| `src/tui/` (7 文件) | `tui/` (7 文件) |
+| `src/tui/__init__.py` | lazy export |
+| `src/tui/app.py` | TUI REPL 主循环 |
+| `src/tui/commands.py` | slash command registry |
+| `src/tui/input.py` | prompt_toolkit / fallback 输入 |
+| `src/tui/renderer.py` | Rich renderer 和 live footer |
+| `src/tui/state.py` | TUI state 和 command context |
+| `src/tui/theme.py` | Console/color helper |
 
-### 统计
+### 历史口径对照
 
-> 当前 `src/` 下 82 个 .py 文件。计算：82 - 1(删除) - 3(合并删除) = 78(迁移) + 14(新建) = 92(目标合计)。
+| 历史名称 | 当前实现位置 |
+|------|------|
+| backend | `src/providers/` |
+| runtime agent/loop/events/types/models/pricing | `src/agent/` |
+| runtime compressor/approvals/context/session/artifacts | `src/agent/harness/` |
+| capabilities/tools | `src/cli/core/tools/` |
+| capabilities/sandbox | `src/cli/core/sandbox/` |
+| capabilities/skills | `src/cli/core/skills/` |
+| capabilities/memory | `src/cli/core/memory/` + `src/cli/core/project/` |
+| capabilities/mcp | `src/cli/core/mcp/` |
+| capabilities/subagents | `src/cli/core/subagents/` |
+| server/protocol | `src/cli/core/server/` + `src/cli/core/protocol/` |
 
-| 类别 | 文件数 |
+### 当前统计
+
+| 区域 | 源文件数 |
 |------|:---:|
-| 迁移 | 78 |
-| 合并删除（旧文件内容迁走后移除） | 3 (sandbox/backend.py, mcp/resources.py, protocol/dispatcher.py) |
-| 删除（不再需要） | 1 (capabilities/__init__.py) |
-| 新建 (Phase 1) | 8 (agent/types.py, memory/runtime.py, message_view.py, session.py, persistence/__init__.py, persistence/run_store.py, persistence/task_state.py, persistence/report.py) |
-| 新建 (Phase 2) | 6 (extensions/*.py ×4, harness/__init__.py, cli/core/__init__.py) |
-| **目标合计** | **92** |
+| 根级 | 1 |
+| `agent/` 含 harness | 32 |
+| `providers/` | 4 |
+| `cli/` 含 core | 53 |
+| `tui/` | 7 |
+| **合计** | **97** |

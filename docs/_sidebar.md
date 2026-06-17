@@ -32,7 +32,7 @@
   * stdio transport、工具注册、资源操作
 
 * [11. 上下文管理](11-context.md)
-  * system prompt、动态附件、五层压缩
+  * system prompt、动态附件、三层上下文治理
 
 * [12. CLI / TUI / Server / 会话](12-cli-tui-session.md)
   * AgentSession、RuntimeThread、事件流、会话持久化

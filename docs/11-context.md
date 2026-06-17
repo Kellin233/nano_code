@@ -148,7 +148,7 @@ or now - last_api_call_time >= SNIP_IDLE_SECONDS
 
 Compact 不再默认“全量摘要后只保留最后 user message”。对 code agent 来说，最近原文通常比全局摘要更重要，因此当前实现采用 rolling compact：旧上下文摘要化，最近上下文原文保留。
 
-cut point 由 `find_compact_cut_index()` 选择：从尾部估算并尽量保留最近约 `COMPACT_KEEP_RECENT_TOKENS`，然后优先落在 user message 边界，避免把一次 tool-use turn 从中间切开。消息总数低于 `COMPACT_MIN_MESSAGES` 时不会自动 compact。
+cut point 由 `find_compact_cut_index()` 选择：`compact_keep_recent_tokens(effective_window)` 会按 `COMPACT_KEEP_RECENT_RATIO = 0.20` 计算最近原文预算，然后从尾部估算并优先落在 user message 边界，避免把一次 tool-use turn 从中间切开。旧消息少于 4 条时 `_summarize_messages()` 不会调用摘要模型，本次 compact 会跳过。
 
 摘要 prompt 要求输出 9 个固定章节：用户请求、技术概念、文件和代码、错误和修复、问题解决、所有用户消息、待办、当前工作、下一步。这不是为了生成漂亮文档，而是为了降低恢复时漏掉“已修改文件、当前错误、用户未完成要求”的概率。
 

@@ -14,13 +14,13 @@
 
 6. **Prompt cache 策略仍可加强**：工具定义排序、deferred 工具稳定性、动态附件边界还可以继续优化。
 
-7. **测试目录名未完全重命名**：`test/runtime`、`test/capabilities` 等目录名仍保留历史口径，import 已经迁移。
+7. **测试目录名仍沿用历史口径**：`test/runtime`、`test/capabilities` 等目录名保留历史分层名，但当前测试 import 已经指向 `nanocode.agent.*`、`nanocode.agent.harness.*`、`nanocode.cli.core.*` 等新包路径。
 
 ## Roadmap
 
 | 优先级 | 功能 | 说明 |
 |:--:|------|------|
-| P0 | 文档和测试目录跟随新架构收敛 | 文档已更新，测试目录可后续重命名 |
+| P0 | 文档和测试目录跟随新架构收敛 | 文档需持续以当前 `src/` 和 fixture 为准，测试目录可后续重命名 |
 | P1 | 系统级 Plan Mode | 全局规划/确认/执行模式 |
 | P2 | 子 Agent workspace 隔离 | git worktree 或临时 workspace |
 | P3 | Extension 启用策略 | allowlist、错误隔离、诊断输出 |

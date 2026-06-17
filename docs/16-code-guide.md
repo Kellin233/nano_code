@@ -36,7 +36,7 @@ cli/core/tools/runtime.py
 | `providers/openai.py` | OpenAI-compatible 流式解析和 function call 转换 |
 | `cli/core/tools/runtime.py` | 工具执行管线 |
 | `cli/core/tools/registry.py` | ToolRegistry、deferred、MCP/extension 工具注册 |
-| `agent/harness/compressor.py` | 五层上下文压缩 |
+| `agent/harness/compressor.py` | 三层上下文治理中的 Tool History Snip 和 Context Compact |
 | `agent/harness/context/sources.py` | AGENTS.md、.nanocode/rules、Git 快照、frontmatter |
 | `agent/harness/persistence/session_log.py` | session.jsonl checkpoint/resume |
 | `agent/harness/persistence/run_store.py` | run trace/report 持久化 |
