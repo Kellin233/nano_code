@@ -182,6 +182,8 @@ class AgentSession:
             summarize_messages=self._summarize_messages,
             build_post_compact_context=self._build_post_compact_context,
             notify=self._notify,
+            enable_tool_history_snip=self.config.context_governance != "off",
+            enable_context_compact=self.config.context_governance != "off",
         )
 
         self.agent.bind_runtime(
@@ -409,6 +411,7 @@ class AgentSession:
             "workspace": str(self.workspace),
             "session_id": self.agent.session_id,
             "is_sub_agent": bool(self.config.is_sub_agent),
+            "context_governance": self.config.context_governance,
         }
 
     def _run_usage_delta(self, prev_in: int, prev_out: int, prev_hit: int, prev_miss: int) -> dict:
@@ -574,7 +577,9 @@ class AgentSession:
             confirmed=self._confirmed_paths,
             hooks=self.hook_manager,
             event_callback=None if self._confirm_emits_approval_events else capture,
-            persist_large_result=self.artifact_store.write_tool_result,
+            persist_large_result=(
+                None if self.config.context_governance == "off" else self.artifact_store.write_tool_result
+            ),
             record_tool_call=self.recent_files.record_tool_call,
             before_tool_call=self.agent._on_before_tool_call,
             after_tool_call=self.agent._on_after_tool_call,

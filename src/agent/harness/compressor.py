@@ -12,13 +12,13 @@ it does not import providers, cli, tui, memory, skills, or MCP modules.
 
 from __future__ import annotations
 
-import json
 import time
 from collections.abc import Awaitable, Callable
 from pathlib import Path
 from typing import NamedTuple
 
-from ..types import ConversationHistory, ConversationMessage, TextBlock, block_to_dict
+from ..budget import estimate_message_tokens, estimate_messages_tokens
+from ..types import ConversationHistory, ConversationMessage, TextBlock
 from .message_view import MessageView
 
 SNIPPABLE_TOOLS = {"read_file", "grep_search", "list_files", "run_shell", "web_fetch", "write_file", "edit_file"}
@@ -27,12 +27,10 @@ SNIP_THRESHOLD = 0.60
 SNIP_IDLE_SECONDS = 5 * 60
 KEEP_RECENT_TOOL_RESULTS = 3
 
-CONTEXT_COMPACT_THRESHOLD = 0.85
-COMPACT_KEEP_RECENT_TOKENS = 20_000
-COMPACT_MIN_MESSAGES = 8
+CONTEXT_COMPACT_THRESHOLD = 0.80
+COMPACT_KEEP_RECENT_RATIO = 0.20
 COMPACT_SUMMARY_MAX_TOKENS = 2048
 MAX_CONSECUTIVE_COMPACT_FAILURES = 3
-CHARS_PER_TOKEN = 4
 
 COMPACT_SYSTEM_PROMPT = """You are a conversation summarizer. Output a structured summary with ALL of the following sections. Each section MUST be populated — never omit a section, write "None" if there is no content.
 
@@ -91,6 +89,8 @@ class Compressor:
         summarize_messages: Callable[[ConversationHistory, str, str, int], Awaitable[str | None]] | None = None,
         build_post_compact_context: Callable[[], str] | None = None,
         notify: Callable[[str], None] | None = None,
+        enable_tool_history_snip: bool = True,
+        enable_context_compact: bool = True,
     ):
         self.agent = agent
         self.workspace = workspace
@@ -98,11 +98,13 @@ class Compressor:
         self.summarize_messages = summarize_messages
         self.build_post_compact_context = build_post_compact_context
         self.notify = notify
+        self.enable_tool_history_snip = enable_tool_history_snip
+        self.enable_context_compact = enable_context_compact
 
     async def prepare_context_for_provider(self) -> ContextPreparation:
         """Run cheap history cleanup first, then compact only if pressure remains high."""
-        snipped = self.snip_tool_history()
-        if await self.should_compact():
+        snipped = self.snip_tool_history() if self.enable_tool_history_snip else False
+        if self.enable_context_compact and await self.should_compact():
             compacted = await self.compact_context(reason="context_pressure")
             if compacted:
                 return ContextPreparation(self.agent.conversation, True, "context_compact")
@@ -129,13 +131,15 @@ class Compressor:
         return True
 
     async def should_compact(self) -> bool:
-        if len(self.agent.conversation.messages) < COMPACT_MIN_MESSAGES:
+        if self.agent.effective_window <= 1:
             return False
         estimated = estimate_messages_tokens(self.agent.conversation.messages)
         return estimated >= int(self.agent.effective_window * CONTEXT_COMPACT_THRESHOLD)
 
     async def compact_context(self, *, reason: str = "manual_compact", force: bool = False) -> bool:
         """Summarize old context and keep recent messages verbatim."""
+        if not self.enable_context_compact:
+            return False
         if not force and not await self.should_compact():
             return False
 
@@ -164,7 +168,10 @@ class Compressor:
 
     async def _build_compacted_history(self) -> ConversationHistory | None:
         messages = self.agent.conversation.messages
-        cut_index = find_compact_cut_index(messages, COMPACT_KEEP_RECENT_TOKENS)
+        keep_recent_tokens = compact_keep_recent_tokens(self.agent.effective_window)
+        if keep_recent_tokens <= 0:
+            return None
+        cut_index = find_compact_cut_index(messages, keep_recent_tokens)
         if cut_index <= 0:
             return None
 
@@ -230,7 +237,7 @@ class Compressor:
     def _last_input_utilization(self) -> float:
         if not self.agent.effective_window:
             return 0.0
-        return self.agent.last_input_token_count / self.agent.effective_window
+        return float(self.agent.last_input_token_count) / float(self.agent.effective_window)
 
     def _message_view(self) -> MessageView:
         return MessageView(self.agent.conversation)
@@ -238,7 +245,7 @@ class Compressor:
 
 def find_compact_cut_index(messages: list[ConversationMessage], keep_recent_tokens: int) -> int:
     """Return an index where recent context starts at a user message."""
-    if len(messages) < COMPACT_MIN_MESSAGES:
+    if keep_recent_tokens <= 0:
         return -1
 
     accumulated = 0
@@ -258,14 +265,12 @@ def find_compact_cut_index(messages: list[ConversationMessage], keep_recent_toke
     return -1
 
 
-def estimate_messages_tokens(messages: list[ConversationMessage]) -> int:
-    return sum(estimate_message_tokens(message) for message in messages)
+def compact_keep_recent_tokens(effective_window: int) -> int:
+    """Return the recent-context budget for compacting.
 
-
-def estimate_message_tokens(message: ConversationMessage) -> int:
-    payload = {
-        "role": message.role,
-        "content": [block_to_dict(block) for block in message.content],
-        "metadata": message.metadata,
-    }
-    return max(1, len(json.dumps(payload, ensure_ascii=False)) // CHARS_PER_TOKEN)
+    The caller owns the model/window configuration. Compressor only applies the
+    configured policy: keep the most recent 20% of the effective context window.
+    """
+    if effective_window <= 1:
+        return 0
+    return int(effective_window * COMPACT_KEEP_RECENT_RATIO)

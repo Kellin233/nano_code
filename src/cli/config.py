@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from ..agent.agent import AgentConfig
 
@@ -21,6 +21,7 @@ class RuntimeConfig:
     max_cost_usd: float | None = None
     max_turns: int | None = None
     context_window: int | None = None
+    context_governance: Literal["full", "off"] = "full"
     custom_system_prompt: str | None = None
     is_sub_agent: bool = False
     sandbox_config: Any | None = None

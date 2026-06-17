@@ -26,6 +26,7 @@ DEFAULT_RESULTS_DIR = BENCH_DIR / "results"
 DEFAULT_SUITE = "core"
 SUITE_CHOICES = {"core", "all", "security", "memory", "resume", "permissions"}
 PERMISSION_MODE_CHOICES = {"yolo", "bypassPermissions", "default", "acceptEdits", "dontAsk"}
+CONTEXT_GOVERNANCE_CHOICES = {"full", "off"}
 if str(BENCH_DIR) not in sys.path:
     sys.path.insert(0, str(BENCH_DIR))
 
@@ -366,6 +367,13 @@ def _task_matches_suite(task: dict, suite: str) -> bool:
     return str(task.get("suite") or _task_suite(task)) == suite
 
 
+def _normalize_context_governance(value: str | None) -> str:
+    normalized = (value or "full").strip().lower()
+    if normalized not in CONTEXT_GOVERNANCE_CHOICES:
+        raise ValueError(f"context_governance must be one of: {', '.join(sorted(CONTEXT_GOVERNANCE_CHOICES))}")
+    return normalized
+
+
 def _run_nanocode(
     task: dict,
     workspace: Path,
@@ -373,9 +381,11 @@ def _run_nanocode(
     timeout: int,
     model: str | None = None,
     stream: bool = False,
+    context_governance: str = "full",
 ) -> subprocess.CompletedProcess:
     env = os.environ.copy()
     env["HOME"] = str(_task_home(workspace))
+    env["NANO_CODE_CONTEXT_GOVERNANCE"] = _normalize_context_governance(context_governance)
     if task.get("context_window"):
         env["NANO_CODE_CONTEXT_WINDOW"] = str(int(task["context_window"]))
     _apply_git_ceiling(env, workspace)
@@ -676,7 +686,16 @@ def _print_progress(done: int, total: int, *, passed: int = 0, failed: int = 0, 
     print(message, flush=True)
 
 
-def run_task(task: dict, *, run_root: Path, timeout: int, model: str | None, stream: bool = False) -> dict:
+def run_task(
+    task: dict,
+    *,
+    run_root: Path,
+    timeout: int,
+    model: str | None,
+    stream: bool = False,
+    context_governance: str = "full",
+) -> dict:
+    context_governance = _normalize_context_governance(context_governance)
     fixture_source = BENCH_DIR / str(task["fixture_repo"])
     workspace = run_root / "workspaces" / task["id"] / fixture_source.name
     task_artifact_dir = run_root / "tasks" / task["id"]
@@ -696,7 +715,14 @@ def run_task(task: dict, *, run_root: Path, timeout: int, model: str | None, str
     if stream:
         print(f"\n=== {task['id']} :: nanocode ===", flush=True)
     try:
-        nanocode = _run_nanocode(task, workspace, timeout=timeout, model=model, stream=stream)
+        nanocode = _run_nanocode(
+            task,
+            workspace,
+            timeout=timeout,
+            model=model,
+            stream=stream,
+            context_governance=context_governance,
+        )
     except subprocess.TimeoutExpired as exc:
         nanocode = subprocess.CompletedProcess(exc.cmd, 124, exc.stdout or "", exc.stderr or "NanoCode timed out.")
     duration_ms = int((time.monotonic() - started) * 1000)
@@ -799,6 +825,7 @@ def run_task(task: dict, *, run_root: Path, timeout: int, model: str | None, str
         "artifact_dir_relpath": str(task_artifact_dir.relative_to(run_root)),
         "scenario": str(task.get("scenario") or "default"),
         "permission_mode": str(task.get("permission_mode") or "yolo"),
+        "context_governance": context_governance,
         "context_window": int(task["context_window"]) if task.get("context_window") else None,
         "run_dir_relpath": str(run_dir.relative_to(run_root)) if run_dir else "",
         "report_relpath": str(report_path.relative_to(run_root)) if report_path and report_exists else "",
@@ -839,6 +866,24 @@ def run_task(task: dict, *, run_root: Path, timeout: int, model: str | None, str
         "non_failure_stop_reason": stop_reason == "stop",
         "report_summary": benchmark_artifacts.report_summary(report),
     }
+    row["non_context_specialty_contract_met"] = bool(
+        row["security_contract_met"]
+        and row["memory_contract_met"]
+        and row["resume_contract_met"]
+        and row["tool_path_limit_contract_met"]
+    )
+    row["task_completion_pass"] = bool(
+        row["nanocode_returncode"] == 0
+        and row["verifier_passed"]
+        and row["report_exists"]
+        and row["report_parse_valid"]
+        and row["expected_artifact_exists"]
+        and row["trace_contract_met"]
+        and row["within_budget"]
+        and row["non_failure_stop_reason"]
+        and row["allowed_tools_enforced"]
+        and row["non_context_specialty_contract_met"]
+    )
     row["passed"] = (
         row["nanocode_returncode"] == 0
         and row["verifier_passed"]
@@ -860,8 +905,9 @@ def run_task(task: dict, *, run_root: Path, timeout: int, model: str | None, str
     return row
 
 
-def _harness_error_row(task: dict, *, run_root: Path, exc: Exception) -> dict:
+def _harness_error_row(task: dict, *, run_root: Path, exc: Exception, context_governance: str = "full") -> dict:
     task_id = str(task.get("id") or "unknown_task")
+    context_governance = _normalize_context_governance(context_governance)
     task_artifact_dir = run_root / "tasks" / task_id
     task_artifact_dir.mkdir(parents=True, exist_ok=True)
     error_text = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
@@ -879,6 +925,7 @@ def _harness_error_row(task: dict, *, run_root: Path, exc: Exception) -> dict:
         "artifact_dir_relpath": str(task_artifact_dir.relative_to(run_root)),
         "scenario": str(task.get("scenario") or "default"),
         "permission_mode": str(task.get("permission_mode") or "yolo"),
+        "context_governance": context_governance,
         "run_dir_relpath": "",
         "report_relpath": "",
         "trace_relpath": "",
@@ -916,6 +963,8 @@ def _harness_error_row(task: dict, *, run_root: Path, exc: Exception) -> dict:
         "stop_reason": "",
         "non_failure_stop_reason": False,
         "report_summary": {},
+        "non_context_specialty_contract_met": False,
+        "task_completion_pass": False,
         "harness_error_type": type(exc).__name__,
         "harness_error": str(exc),
         "passed": False,
@@ -986,6 +1035,7 @@ def summarize_rows(rows: list[dict], *, selected_task_count: int | None = None) 
 
 def run_benchmark(args: argparse.Namespace) -> dict:
     benchmark = load_benchmark(Path(args.task_file))
+    context_governance = _normalize_context_governance(getattr(args, "context_governance", "full"))
     tasks = list(benchmark["tasks"])
     if args.task_id:
         wanted = set(args.task_id)
@@ -1021,9 +1071,15 @@ def run_benchmark(args: argparse.Namespace) -> dict:
                     timeout=int(args.timeout),
                     model=args.model,
                     stream=bool(args.stream),
+                    context_governance=context_governance,
                 )
             except Exception as exc:
-                row = _harness_error_row(task, run_root=run_root, exc=exc)
+                row = _harness_error_row(
+                    task,
+                    run_root=run_root,
+                    exc=exc,
+                    context_governance=context_governance,
+                )
             rows.append(row)
             if row.get("passed"):
                 passed += 1
@@ -1049,6 +1105,7 @@ def run_benchmark(args: argparse.Namespace) -> dict:
             "commit_sha": _git_value(["rev-parse", "HEAD"]),
             "branch": _git_value(["branch", "--show-current"]),
             "model": args.model or os.environ.get("NANO_CODE_MODEL", ""),
+            "context_governance": context_governance,
         },
         "reproducibility": {
             "fixture_snapshot_id": _fixture_snapshot_id([BENCH_DIR / str(task["fixture_repo"]) for task in tasks]),
@@ -1073,6 +1130,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--timeout", type=int, default=180, help="Per-task NanoCode/verifier timeout in seconds.")
     parser.add_argument("--model", default=None, help="Optional model override passed to nanocode --model.")
+    parser.add_argument(
+        "--context-governance",
+        choices=sorted(CONTEXT_GOVERNANCE_CHOICES),
+        default="full",
+        help="Context governance variant for ablation runs.",
+    )
     parser.add_argument("--stream", action="store_true", help="Print NanoCode and verifier output while each task runs.")
     parser.add_argument("--dry-run", action="store_true", help="Validate and write an empty benchmark artifact without invoking NanoCode.")
     return parser

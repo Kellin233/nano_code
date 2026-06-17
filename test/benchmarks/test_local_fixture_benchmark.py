@@ -131,6 +131,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
                     model=None,
                     stream=False,
                     dry_run=True,
+                    context_governance="off",
                 )
             )
 
@@ -140,6 +141,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
             self.assertEqual(persisted, artifact)
             self.assertEqual(artifact["benchmark"]["task_count"], 2)
             self.assertEqual(artifact["benchmark"]["suite"], "core")
+            self.assertEqual(artifact["runtime"]["context_governance"], "off")
             self.assertEqual(artifact["summary"]["selected_tasks"], 2)
             self.assertEqual(artifact["summary"]["executed_tasks"], 0)
             self.assertIn("benchmark_definition_id", artifact["reproducibility"])
@@ -212,6 +214,26 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         env = run_subprocess.call_args.kwargs["env"]
         self.assertEqual(env["NANO_CODE_CONTEXT_WINDOW"], "70000")
 
+    def test_run_nanocode_passes_context_governance_override_in_env(self) -> None:
+        runner = _load_runner()
+        task = {
+            "prompt": "hello",
+            "step_budget": 3,
+        }
+
+        with tempfile.TemporaryDirectory() as tmp, patch.object(runner, "_run_subprocess") as run_subprocess:
+            runner._run_nanocode(
+                task,
+                Path(tmp),
+                timeout=5,
+                model=None,
+                stream=False,
+                context_governance="off",
+            )
+
+        env = run_subprocess.call_args.kwargs["env"]
+        self.assertEqual(env["NANO_CODE_CONTEXT_GOVERNANCE"], "off")
+
     def test_run_benchmark_records_harness_error_and_continues(self) -> None:
         runner = _load_runner()
 
@@ -241,6 +263,40 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         self.assertEqual(row["failure_category"], "harness_error")
         self.assertEqual(row["harness_error_type"], "RuntimeError")
         self.assertEqual(artifact["summary"]["failed"], 1)
+
+    def test_budget_token_estimator_is_block_aware(self) -> None:
+        from nanocode.agent.budget import (
+            estimate_block_tokens,
+            estimate_conversation_tokens,
+            estimate_message_tokens,
+        )
+        from nanocode.agent.types import (
+            ConversationHistory,
+            ConversationMessage,
+            TextBlock,
+            ToolResultBlock,
+            ToolUseBlock,
+        )
+
+        text = TextBlock("abcd " * 20)
+        tool_use = ToolUseBlock(id="call_1", name="read_file", input={"file_path": "src/example.py"})
+        short_result = ToolResultBlock(tool_use_id="call_1", tool_name="read_file", content="short")
+        long_result = ToolResultBlock(tool_use_id="call_1", tool_name="read_file", content="x" * 1000)
+
+        self.assertGreater(estimate_block_tokens(tool_use), estimate_block_tokens(TextBlock("read_file")))
+        self.assertGreater(estimate_block_tokens(long_result), estimate_block_tokens(short_result))
+
+        messages = [
+            ConversationMessage(role="user", content=[text]),
+            ConversationMessage(role="assistant", content=[tool_use]),
+            ConversationMessage(role="tool_result", content=[long_result]),
+        ]
+        history = ConversationHistory(messages)
+
+        self.assertEqual(
+            estimate_conversation_tokens(history),
+            sum(estimate_message_tokens(message) for message in messages),
+        )
 
     def test_security_expectation_rejects_unrelated_error(self) -> None:
         runner = _load_runner()
@@ -568,7 +624,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         runner = _load_runner()
         task = runner.load_benchmark()["tasks"][0]
 
-        def fake_nanocode(task, workspace, *, timeout, model, stream):
+        def fake_nanocode(task, workspace, *, timeout, model, stream, context_governance="full"):
             run_dir = workspace / ".nanocode" / "runs" / "run_1"
             run_dir.mkdir(parents=True)
             report = {
@@ -663,7 +719,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         runner = _load_runner()
         task = next(task for task in runner.load_benchmark()["tasks"] if task["id"] == "resume_checkpoint_goal")
 
-        def fake_nanocode(task, workspace, *, timeout, model, stream):
+        def fake_nanocode(task, workspace, *, timeout, model, stream, context_governance="full"):
             interrupted_trace = workspace / ".nanocode" / "runs" / task["resume_interrupted_run_id"] / "trace.jsonl"
             with interrupted_trace.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps({"event": "run_interrupted"}) + "\n")
@@ -717,7 +773,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         security_task = next(task for task in runner.load_benchmark()["tasks"] if task["id"] == "security_approval_denied_shell")
         memory_task = next(task for task in runner.load_benchmark()["tasks"] if task["id"] == "memory_fact_lookup")
 
-        def fake_security_nanocode(task, workspace, *, timeout, model, stream):
+        def fake_security_nanocode(task, workspace, *, timeout, model, stream, context_governance="full"):
             run_dir = workspace / ".nanocode" / "runs" / "run_security"
             run_dir.mkdir(parents=True)
             (run_dir / "report.json").write_text(
@@ -765,7 +821,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
             (workspace / "safe.txt").write_text("safe=shell-denied\n", encoding="utf-8")
             return runner.subprocess.CompletedProcess(["nanocode"], 0, "", "")
 
-        def fake_memory_nanocode(task, workspace, *, timeout, model, stream):
+        def fake_memory_nanocode(task, workspace, *, timeout, model, stream, context_governance="full"):
             run_dir = workspace / ".nanocode" / "runs" / "run_memory"
             run_dir.mkdir(parents=True)
             (run_dir / "report.json").write_text(
@@ -829,7 +885,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         runner = _load_runner()
         tasks = {task["id"]: task for task in runner.load_benchmark()["tasks"]}
 
-        def fake_security_without_event(task, workspace, *, timeout, model, stream):
+        def fake_security_without_event(task, workspace, *, timeout, model, stream, context_governance="full"):
             run_dir = workspace / ".nanocode" / "runs" / "run_security"
             run_dir.mkdir(parents=True)
             (run_dir / "report.json").write_text(
@@ -860,7 +916,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
             (workspace / "safe.txt").write_text("safe=shell-denied\n", encoding="utf-8")
             return runner.subprocess.CompletedProcess(["nanocode"], 0, "", "")
 
-        def fake_memory_with_fallback(task, workspace, *, timeout, model, stream):
+        def fake_memory_with_fallback(task, workspace, *, timeout, model, stream, context_governance="full"):
             run_dir = workspace / ".nanocode" / "runs" / "run_memory"
             run_dir.mkdir(parents=True)
             (run_dir / "report.json").write_text(
@@ -896,7 +952,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
             (workspace / "memory_answer.txt").write_text("memory_answer=canary-blue\n", encoding="utf-8")
             return runner.subprocess.CompletedProcess(["nanocode"], 0, "", "")
 
-        def fake_memory_conflict_without_current_truth_read(task, workspace, *, timeout, model, stream):
+        def fake_memory_conflict_without_current_truth_read(task, workspace, *, timeout, model, stream, context_governance="full"):
             run_dir = workspace / ".nanocode" / "runs" / "run_memory_conflict"
             run_dir.mkdir(parents=True)
             (run_dir / "report.json").write_text(
@@ -1014,7 +1070,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         runner = _load_runner()
         task = runner.load_benchmark()["tasks"][0]
 
-        def fake_without_trace(task, workspace, *, timeout, model, stream):
+        def fake_without_trace(task, workspace, *, timeout, model, stream, context_governance="full"):
             run_dir = workspace / ".nanocode" / "runs" / "run_missing_trace"
             run_dir.mkdir(parents=True)
             (run_dir / "report.json").write_text(
@@ -1037,7 +1093,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
             Path(workspace / task["artifact_path"]).write_text("This fixture is a locked benchmark workspace.\n", encoding="utf-8")
             return runner.subprocess.CompletedProcess(["nanocode"], 0, "", "")
 
-        def fake_invalid_trace(task, workspace, *, timeout, model, stream):
+        def fake_invalid_trace(task, workspace, *, timeout, model, stream, context_governance="full"):
             run_dir = workspace / ".nanocode" / "runs" / "run_invalid_trace"
             run_dir.mkdir(parents=True)
             (run_dir / "report.json").write_text(
@@ -1088,7 +1144,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         runner = _load_runner()
         task = runner.load_benchmark()["tasks"][0]
 
-        def fake_invalid_report(task, workspace, *, timeout, model, stream):
+        def fake_invalid_report(task, workspace, *, timeout, model, stream, context_governance="full"):
             run_dir = workspace / ".nanocode" / "runs" / "run_invalid_report"
             run_dir.mkdir(parents=True)
             (run_dir / "report.json").write_text("{not json}\n", encoding="utf-8")
@@ -1117,7 +1173,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         runner = _load_runner()
         task = runner.load_benchmark()["tasks"][0]
 
-        def fake_incomplete_trace(task, workspace, *, timeout, model, stream):
+        def fake_incomplete_trace(task, workspace, *, timeout, model, stream, context_governance="full"):
             run_dir = workspace / ".nanocode" / "runs" / "run_incomplete_trace"
             run_dir.mkdir(parents=True)
             (run_dir / "report.json").write_text(
@@ -1197,7 +1253,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         runner = _load_runner()
         task = next(task for task in runner.load_benchmark()["tasks"] if task["id"] == "run_artifacts_present")
 
-        def fake_nanocode(task, workspace, *, timeout, model, stream):
+        def fake_nanocode(task, workspace, *, timeout, model, stream, context_governance="full"):
             runs_root = workspace / ".nanocode" / "runs"
             main_run = runs_root / "run_main"
             sub_run = runs_root / "run_sub"
@@ -1248,7 +1304,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         task = dict(runner.load_benchmark()["tasks"][0])
         task["allowed_tools"] = ["edit_file"]
 
-        def fake_nanocode(task, workspace, *, timeout, model, stream):
+        def fake_nanocode(task, workspace, *, timeout, model, stream, context_governance="full"):
             run_dir = workspace / ".nanocode" / "runs" / "run_blocked"
             run_dir.mkdir(parents=True)
             report = {
@@ -1593,20 +1649,24 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         )
         self.assertEqual(result["profiles"]["baseline_profile"]["config_count"], 16)
         self.assertNotIn("synthetic_stress", result)
-        self.assertIn("avg_raw_prompt_chars", result["pico_metrics"])
-        self.assertIn("avg_full_prompt_chars", result["pico_metrics"])
-        self.assertIn("avg_prompt_compression_ratio", result["pico_metrics"])
-        self.assertIn("baseline_avg_prompt_compression_ratio", result["pico_metrics"])
-        self.assertIn("pressure_avg_prompt_compression_ratio", result["pico_metrics"])
-        self.assertIn("scenario_avg_prompt_compression_ratio", result["pico_metrics"])
-        self.assertIn("tool_result_budget_case_avg_prompt_compression_ratio", result["pico_metrics"])
-        self.assertIn("profile_avg_prompt_compression_ratio", result["pico_metrics"])
-        self.assertIn("context_management_avg_prompt_compression_ratio", result["pico_metrics"])
-        self.assertIn("max_prompt_compression_ratio", result["pico_metrics"])
+        self.assertEqual(result["measurement_unit"], "provider_neutral_conversation_estimated_tokens")
+        self.assertIn("avg_raw_prompt_estimated_tokens", result["pico_metrics"])
+        self.assertIn("avg_governed_prompt_estimated_tokens", result["pico_metrics"])
+        self.assertIn("avg_prompt_estimated_token_compression_ratio", result["pico_metrics"])
+        self.assertIn("baseline_avg_prompt_estimated_token_compression_ratio", result["pico_metrics"])
+        self.assertIn("pressure_avg_prompt_estimated_token_compression_ratio", result["pico_metrics"])
+        self.assertIn("scenario_avg_prompt_estimated_token_compression_ratio", result["pico_metrics"])
+        self.assertIn("tool_result_budget_case_avg_prompt_estimated_token_compression_ratio", result["pico_metrics"])
+        self.assertIn("profile_avg_prompt_estimated_token_compression_ratio", result["pico_metrics"])
+        self.assertIn("context_management_avg_prompt_estimated_token_compression_ratio", result["pico_metrics"])
+        self.assertIn("max_prompt_estimated_token_compression_ratio", result["pico_metrics"])
         self.assertIn("current_request_preserved_rate", result["pico_metrics"])
         self.assertEqual(result["current_request_preserved_rate"], 1.0)
-        self.assertGreater(result["avg_raw_prompt_chars"], result["avg_full_prompt_chars"])
-        self.assertEqual(result["avg_prompt_compression_ratio"], result["context_management_four_level"]["avg_prompt_compression_ratio"])
+        self.assertGreater(result["avg_raw_prompt_estimated_tokens"], result["avg_governed_prompt_estimated_tokens"])
+        self.assertEqual(
+            result["avg_prompt_estimated_token_compression_ratio"],
+            result["context_management_four_level"]["avg_prompt_estimated_token_compression_ratio"],
+        )
         self.assertEqual(result["scenarios"]["no_compression_baseline"]["compression_triggered_rate"], 0.0)
         self.assertEqual(result["scenarios"]["tool_result_budget"]["large_result_persist_trigger_rate"], 1.0)
         self.assertEqual(result["scenarios"]["tool_result_budget"]["tool_history_snip_trigger_rate"], 0.0)
@@ -1615,7 +1675,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         self.assertEqual(result["tool_result_budget_mix"]["large_search_output"]["large_result_persist_trigger_rate"], 1.0)
         self.assertEqual(result["tool_result_budget_mix"]["ci_log"]["large_result_persist_trigger_rate"], 1.0)
         for data in result["tool_result_budget_mix"].values():
-            self.assertGreater(data["avg_prompt_compression_ratio"], 0.0)
+            self.assertGreater(data["avg_prompt_estimated_token_compression_ratio"], 0.0)
         ci_rows = [row for row in result["rows"] if row.get("tool_result_budget_case") == "ci_log"]
         self.assertEqual({row["tool_name"] for row in ci_rows}, {"run_shell"})
         self.assertEqual({row["tool_name"] for row in result["rows"] if row.get("tool_result_budget_case") == "large_search_output"}, {"grep_search"})
@@ -1623,13 +1683,95 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
         self.assertEqual(result["scenarios"]["tool_history_snip"]["context_compact_trigger_rate"], 0.0)
         self.assertEqual(result["scenarios"]["context_compact"]["context_compact_trigger_rate"], 1.0)
         self.assertEqual(result["scenarios"]["context_compact"]["post_compact_context_restored_rate"], 1.0)
-        self.assertEqual(result["baseline_avg_prompt_compression_ratio"], 0.0)
-        self.assertGreater(result["pressure_avg_prompt_compression_ratio"], result["baseline_avg_prompt_compression_ratio"])
+        self.assertEqual(result["baseline_avg_prompt_estimated_token_compression_ratio"], 0.0)
+        self.assertGreater(
+            result["pressure_avg_prompt_estimated_token_compression_ratio"],
+            result["baseline_avg_prompt_estimated_token_compression_ratio"],
+        )
         self.assertGreater(result["large_result_persist_count"], 0)
         self.assertGreater(result["profiles"]["debugging_profile"]["large_result_persist_count"], 0)
         self.assertGreater(result["snipped_tool_result_count"], 0)
         self.assertIn("pressure_context_compact_count", result)
         self.assertEqual(result["pressure_context_compact_count"], 4)
+
+    def test_context_task_ablation_uses_task_completion_not_context_contract(self) -> None:
+        ablation = _load_ablation()
+
+        def row(*, task_id: str, passed: bool, context_contract_met: bool, persist_count: int, input_tokens: int):
+            return {
+                "id": task_id,
+                "category": "context-governance",
+                "tags": ["context-stress", "tool-result-budget"],
+                "nanocode_returncode": 0,
+                "verifier_passed": True,
+                "report_exists": True,
+                "report_parse_valid": True,
+                "expected_artifact_exists": True,
+                "trace_exists": True,
+                "trace_parse_valid": True,
+                "trace_contract_met": True,
+                "within_budget": True,
+                "non_failure_stop_reason": True,
+                "allowed_tools_enforced": True,
+                "security_contract_met": True,
+                "memory_contract_met": True,
+                "resume_contract_met": True,
+                "tool_path_limit_contract_met": True,
+                "context_contract_met": context_contract_met,
+                "passed": passed,
+                "stop_reason": "stop",
+                "tool_steps": 3,
+                "attempts": 3,
+                "large_result_persist_count": persist_count,
+                "tool_history_snip_count": 0,
+                "context_compact_count": 0,
+                "report_summary": {
+                    "usage": {
+                        "input_tokens": input_tokens,
+                        "output_tokens": 20,
+                        "estimated_cost_usd": 0.01,
+                    }
+                },
+            }
+
+        context_on = {"rows": [row(
+            task_id="context_large_result_persist",
+            passed=True,
+            context_contract_met=True,
+            persist_count=1,
+            input_tokens=100,
+        )]}
+        context_off = {"rows": [row(
+            task_id="context_large_result_persist",
+            passed=False,
+            context_contract_met=False,
+            persist_count=0,
+            input_tokens=400,
+        )]}
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            patch.object(ablation, "_run_context_task_variant", return_value=context_off),
+        ):
+            result = ablation.run_context_task_completion_ablation(
+                run_root=Path(tmp),
+                task_file=RUNNER_PATH.parent / "tasks.json",
+                suite="all",
+                timeout=5,
+                model=None,
+                stream=False,
+                execute=True,
+                context_on_artifact=context_on,
+            )
+
+        self.assertEqual(result["status"], "measured")
+        self.assertEqual(result["variants"]["context_on"]["task_completion_pass_rate"], 1.0)
+        self.assertEqual(result["variants"]["context_off"]["task_completion_pass_rate"], 1.0)
+        self.assertEqual(result["variants"]["context_off"]["original_pass_rate"], 0.0)
+        self.assertEqual(result["context_sensitive_variants"]["context_off"]["run_count"], 1)
+        self.assertEqual(result["variants"]["context_on"]["large_result_persist_count"], 1)
+        self.assertEqual(result["variants"]["context_off"]["large_result_persist_count"], 0)
+        self.assertEqual(result["deltas"]["avg_input_tokens_delta_off_minus_on"], 300.0)
 
     def test_memory_ablation_uses_real_rows_and_strict_hit_definition(self) -> None:
         ablation = _load_ablation()
@@ -1767,6 +1909,7 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
             self.assertTrue((root / "ablation.json").exists())
             self.assertTrue((root / "harness-regression-v2.json").exists())
             self.assertTrue((root / "context-ablation-v2.json").exists())
+            self.assertTrue((root / "context-task-ablation-v2.json").exists())
             self.assertTrue((root / "memory-ablation-v2.json").exists())
             self.assertTrue((root / "recovery-ablation-v2.json").exists())
             self.assertTrue((root / "ablation-report.md").exists())
@@ -1774,9 +1917,11 @@ class LocalFixtureBenchmarkTests(unittest.TestCase):
 
         self.assertEqual(artifact["schema_version"], 2)
         self.assertEqual(artifact["suites"]["harness_regression"]["status"], "skipped")
+        self.assertEqual(artifact["suites"]["context_task_completion_ablation"]["status"], "not_measured")
         self.assertEqual(artifact["suites"]["working_memory_ablation"]["status"], "not_measured")
         self.assertEqual(artifact["suites"]["recovery_resume_ablation"]["e2e_status"], "not_measured")
         self.assertEqual(artifact["summary"]["context_current_request_preserved_rate"], 1.0)
+        self.assertEqual(artifact["summary"]["context_task_status"], "not_measured")
 
 
 if __name__ == "__main__":

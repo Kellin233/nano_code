@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from typing import Literal
 
 from .config import RuntimeConfig
 from .core.sandbox.config import build_sandbox_config
@@ -90,6 +91,12 @@ def resolve_context_window() -> int | None:
     return value if value > 0 else None
 
 
+def resolve_context_governance() -> Literal["full", "off"]:
+    """Parse an internal benchmark/test context governance override."""
+    value = (os.environ.get("NANO_CODE_CONTEXT_GOVERNANCE") or "full").strip().lower()
+    return "off" if value == "off" else "full"
+
+
 def resolve_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
     """将 CLI 参数和环境变量合并为 RuntimeConfig。
 
@@ -132,6 +139,7 @@ def resolve_runtime_config(args: argparse.Namespace) -> RuntimeConfig:
         max_cost_usd=args.max_cost,
         max_turns=args.max_turns,
         context_window=resolve_context_window(),
+        context_governance=resolve_context_governance(),
         api_base=resolved_api_base if resolved_use_openai else None,
         anthropic_base_url=resolved_api_base if not resolved_use_openai else None,
         api_key=resolved_api_key,

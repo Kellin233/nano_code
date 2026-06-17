@@ -53,6 +53,16 @@ CONTEXT_TOOL_RESULT_BUDGET_MIX = (
     ("large_search_output", 2),
     ("ci_log", 2),
 )
+CONTEXT_TASK_VARIANTS = ("context_on", "context_off")
+CONTEXT_SENSITIVE_TAGS = {
+    "context-stress",
+    "large-file",
+    "huge-file",
+    "tool-result-budget",
+    "tool-history-snip",
+    "large-result",
+    "controlled-context-window",
+}
 PRIMARY_CONTEXT_PROFILE = "context_management_four_level"
 CONTEXT_BASELINE_UTILIZATION = 0.20
 CONTEXT_PRESSURE_UTILIZATION = 0.75
@@ -218,7 +228,7 @@ def run_context_ablation(*, run_root: Path) -> dict[str, Any]:
         "schema_version": 2,
         "suite": "context_ablation",
         "method": "deterministic_four_level_context_governance_cases_using_tool_runtime_and_compressor",
-        "measurement_unit": "provider_neutral_conversation_snapshot_chars",
+        "measurement_unit": "provider_neutral_conversation_estimated_tokens",
         "primary_profile": PRIMARY_CONTEXT_PROFILE,
         "config_count": len(rows),
         "scenario_counts": {name: scenarios[name]["config_count"] for name in CONTEXT_SCENARIO_ORDER},
@@ -230,12 +240,16 @@ def run_context_ablation(*, run_root: Path) -> dict[str, Any]:
         "scenarios": scenarios,
         PRIMARY_CONTEXT_PROFILE: primary,
         "pressure_scenarios": pressure,
-        "avg_raw_prompt_chars": primary["avg_raw_prompt_chars"],
-        "avg_full_prompt_chars": primary["avg_full_prompt_chars"],
-        "avg_prompt_compression_ratio": primary["avg_prompt_compression_ratio"],
-        "baseline_avg_prompt_compression_ratio": baseline["avg_prompt_compression_ratio"],
-        "pressure_avg_prompt_compression_ratio": pressure["avg_prompt_compression_ratio"],
-        "max_prompt_compression_ratio": primary["max_prompt_compression_ratio"],
+        "avg_raw_prompt_estimated_tokens": primary["avg_raw_prompt_estimated_tokens"],
+        "avg_governed_prompt_estimated_tokens": primary["avg_governed_prompt_estimated_tokens"],
+        "avg_prompt_estimated_token_compression_ratio": primary["avg_prompt_estimated_token_compression_ratio"],
+        "baseline_avg_prompt_estimated_token_compression_ratio": baseline[
+            "avg_prompt_estimated_token_compression_ratio"
+        ],
+        "pressure_avg_prompt_estimated_token_compression_ratio": pressure[
+            "avg_prompt_estimated_token_compression_ratio"
+        ],
+        "max_prompt_estimated_token_compression_ratio": primary["max_prompt_estimated_token_compression_ratio"],
         "current_request_preserved_rate": primary["current_request_preserved_rate"],
         "large_result_persist_count": sum(int(row["large_result_persist_count"]) for row in rows),
         "snipped_tool_result_count": sum(int(row["snipped_tool_result_count"]) for row in rows),
@@ -246,24 +260,30 @@ def run_context_ablation(*, run_root: Path) -> dict[str, Any]:
     }
     result["pico_metrics"] = {
         "primary_profile": result["primary_profile"],
-        "avg_raw_prompt_chars": primary["avg_raw_prompt_chars"],
-        "avg_full_prompt_chars": primary["avg_full_prompt_chars"],
-        "avg_prompt_compression_ratio": primary["avg_prompt_compression_ratio"],
-        "baseline_avg_prompt_compression_ratio": baseline["avg_prompt_compression_ratio"],
-        "pressure_avg_prompt_compression_ratio": pressure["avg_prompt_compression_ratio"],
-        "max_prompt_compression_ratio": primary["max_prompt_compression_ratio"],
+        "avg_raw_prompt_estimated_tokens": primary["avg_raw_prompt_estimated_tokens"],
+        "avg_governed_prompt_estimated_tokens": primary["avg_governed_prompt_estimated_tokens"],
+        "avg_prompt_estimated_token_compression_ratio": primary["avg_prompt_estimated_token_compression_ratio"],
+        "baseline_avg_prompt_estimated_token_compression_ratio": baseline[
+            "avg_prompt_estimated_token_compression_ratio"
+        ],
+        "pressure_avg_prompt_estimated_token_compression_ratio": pressure[
+            "avg_prompt_estimated_token_compression_ratio"
+        ],
+        "max_prompt_estimated_token_compression_ratio": primary["max_prompt_estimated_token_compression_ratio"],
         "current_request_preserved_rate": primary["current_request_preserved_rate"],
         "scenario_counts": result["scenario_counts"],
-        "scenario_avg_prompt_compression_ratio": {
-            scenario: data["avg_prompt_compression_ratio"] for scenario, data in scenarios.items()
+        "scenario_avg_prompt_estimated_token_compression_ratio": {
+            scenario: data["avg_prompt_estimated_token_compression_ratio"] for scenario, data in scenarios.items()
         },
-        "tool_result_budget_case_avg_prompt_compression_ratio": {
-            name: data["avg_prompt_compression_ratio"] for name, data in budget_mix.items()
+        "tool_result_budget_case_avg_prompt_estimated_token_compression_ratio": {
+            name: data["avg_prompt_estimated_token_compression_ratio"] for name, data in budget_mix.items()
         },
-        "profile_avg_prompt_compression_ratio": {
-            profile: data["avg_prompt_compression_ratio"] for profile, data in profiles.items()
+        "profile_avg_prompt_estimated_token_compression_ratio": {
+            profile: data["avg_prompt_estimated_token_compression_ratio"] for profile, data in profiles.items()
         },
-        "context_management_avg_prompt_compression_ratio": primary["avg_prompt_compression_ratio"],
+        "context_management_avg_prompt_estimated_token_compression_ratio": primary[
+            "avg_prompt_estimated_token_compression_ratio"
+        ],
     }
     benchmark_artifacts.write_json(run_root / "context-ablation-v2.json", result)
     return result
@@ -381,9 +401,9 @@ def _context_case_specs() -> list[dict[str, Any]]:
 
 
 def _context_profile_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    raw_values = [int(row["raw_prompt_chars"]) for row in rows]
-    full_values = [int(row["full_prompt_chars"]) for row in rows]
-    ratios = [float(row["prompt_compression_ratio"]) for row in rows]
+    raw_values = [int(row["raw_prompt_estimated_tokens"]) for row in rows]
+    governed_values = [int(row["governed_prompt_estimated_tokens"]) for row in rows]
+    ratios = [float(row["prompt_estimated_token_compression_ratio"]) for row in rows]
     preserved = sum(1 for row in rows if row["current_request_preserved"])
     compact_restore_rows = [
         row for row in rows if row["pressure_context_compacted"] or row["forced_context_compacted"]
@@ -395,10 +415,10 @@ def _context_profile_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
     compact_triggered = sum(1 for row in rows if row["pressure_context_compacted"])
     return {
         "config_count": len(rows),
-        "avg_raw_prompt_chars": _mean(raw_values),
-        "avg_full_prompt_chars": _mean(full_values),
-        "avg_prompt_compression_ratio": _mean(ratios),
-        "max_prompt_compression_ratio": max(ratios) if ratios else 0.0,
+        "avg_raw_prompt_estimated_tokens": _mean(raw_values),
+        "avg_governed_prompt_estimated_tokens": _mean(governed_values),
+        "avg_prompt_estimated_token_compression_ratio": _mean(ratios),
+        "max_prompt_estimated_token_compression_ratio": max(ratios) if ratios else 0.0,
         "current_request_preserved_rate": _safe_rate(preserved, len(rows)),
         "compression_triggered_count": compression_triggered,
         "compression_triggered_rate": _safe_rate(compression_triggered, len(rows)),
@@ -420,6 +440,7 @@ def _run_context_case(
     spec: dict[str, Any],
 ) -> dict[str, Any]:
     from nanocode.agent.agent import Agent, AgentConfig
+    from nanocode.agent.budget import estimate_conversation_tokens
     from nanocode.agent.harness.compressor import Compressor, SNIP_PLACEHOLDER
     from nanocode.agent.types import ConversationHistory
 
@@ -446,7 +467,7 @@ def _run_context_case(
         budget_large_results=True,
         tool_result_budget_case=str(spec.get("tool_result_budget_case") or ""),
     )
-    raw_chars = _history_chars(raw_history["history"])
+    raw_tokens = estimate_conversation_tokens(raw_history["history"])
 
     async def summarize_messages(history, _system_prompt, _user_prompt, _max_tokens):
         return (
@@ -478,12 +499,12 @@ def _run_context_case(
     )
     pressure_preparation = asyncio.run(pressure_compressor.prepare_context_for_provider())
     snipped_count = _count_text(pressure_agent.conversation, SNIP_PLACEHOLDER)
-    full_chars = _history_chars(pressure_agent.conversation)
+    governed_tokens = estimate_conversation_tokens(pressure_agent.conversation)
     current_preserved = _history_contains_text(pressure_agent.conversation, str(spec["current_request"]))
 
     forced_compacted = False
     forced_restored = False
-    forced_compacted_chars = 0
+    forced_compacted_tokens = 0
     if spec["scenario"] == "context_compact":
         forced_agent = Agent(AgentConfig(
             model="claude-opus-4-6",
@@ -498,8 +519,8 @@ def _run_context_case(
         )
         forced_compacted = asyncio.run(forced_compressor.compact_context(reason="ablation_forced_compact", force=True))
         forced_restored = _history_contains_text(forced_agent.conversation, "Recent file context refreshed.")
-        forced_compacted_chars = _history_chars(forced_agent.conversation)
-    ratio = max(0.0, 1.0 - _safe_rate(full_chars, raw_chars))
+        forced_compacted_tokens = estimate_conversation_tokens(forced_agent.conversation)
+    ratio = max(0.0, 1.0 - _safe_rate(governed_tokens, raw_tokens))
     compression_triggered = bool(
         governed_history["persisted_count"] > 0
         or snipped_count > 0
@@ -522,11 +543,11 @@ def _run_context_case(
         "request_level": spec["request_label"],
         "pressure_utilization": spec["pressure_utilization"],
         "context_window": spec.get("context_window"),
-        "raw_prompt_chars": raw_chars,
-        "full_prompt_chars": full_chars,
-        "raw_conversation_snapshot_chars": raw_chars,
-        "governed_conversation_snapshot_chars": full_chars,
-        "prompt_compression_ratio": ratio,
+        "raw_prompt_estimated_tokens": raw_tokens,
+        "governed_prompt_estimated_tokens": governed_tokens,
+        "raw_conversation_estimated_tokens": raw_tokens,
+        "governed_conversation_estimated_tokens": governed_tokens,
+        "prompt_estimated_token_compression_ratio": ratio,
         "large_result_persist_count": governed_history["persisted_count"],
         "context_preparation_reason": pressure_preparation.reason,
         "compression_triggered": compression_triggered,
@@ -534,7 +555,7 @@ def _run_context_case(
         "snipped_tool_result_count": snipped_count,
         "pressure_context_compacted": pressure_preparation.reason == "context_compact",
         "forced_context_compacted": forced_compacted,
-        "forced_compacted_chars": forced_compacted_chars,
+        "forced_compacted_estimated_tokens": forced_compacted_tokens,
         "current_request_preserved": current_preserved,
         "post_compact_context_restored": forced_restored,
     }
@@ -1150,16 +1171,320 @@ def _history_json(history) -> str:
     return json.dumps(history.snapshot(), ensure_ascii=False, sort_keys=True)
 
 
-def _history_chars(history) -> int:
-    return len(_history_json(history))
-
-
 def _history_contains_text(history, needle: str) -> bool:
     return needle in _history_json(history)
 
 
 def _count_text(history, needle: str) -> int:
     return _history_json(history).count(needle)
+
+
+def run_context_task_completion_ablation(
+    *,
+    run_root: Path,
+    task_file: Path,
+    suite: str,
+    timeout: int,
+    model: str | None,
+    stream: bool,
+    execute: bool = False,
+    context_on_artifact: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Compare task completion with context governance enabled and disabled."""
+    if not execute:
+        result = {
+            "schema_version": 2,
+            "suite": "context_task_completion_ablation",
+            "status": NOT_MEASURED,
+            "method": "full_task_completion_context_on_off",
+            "task_count": 0,
+            "context_sensitive_task_count": 0,
+            "variants": {
+                variant: _context_task_variant_metrics([])
+                for variant in CONTEXT_TASK_VARIANTS
+            },
+            "context_sensitive_variants": {
+                variant: _context_task_variant_metrics([])
+                for variant in CONTEXT_TASK_VARIANTS
+            },
+            "deltas": {},
+            "context_sensitive_deltas": {},
+            "rows": [],
+        }
+        result["pico_metrics"] = _context_task_pico_metrics(result)
+        benchmark_artifacts.write_json(run_root / "context-task-ablation-v2.json", result)
+        return result
+
+    if context_on_artifact is None:
+        context_on_artifact = _run_context_task_variant(
+            run_root=run_root,
+            task_file=task_file,
+            suite=suite,
+            timeout=timeout,
+            model=model,
+            stream=stream,
+            variant="context_on",
+            context_governance="full",
+        )
+
+    context_off_artifact = _run_context_task_variant(
+        run_root=run_root,
+        task_file=task_file,
+        suite=suite,
+        timeout=timeout,
+        model=model,
+        stream=stream,
+        variant="context_off",
+        context_governance="off",
+    )
+
+    rows = [
+        *_context_task_rows_from_benchmark(context_on_artifact, "context_on"),
+        *_context_task_rows_from_benchmark(context_off_artifact, "context_off"),
+    ]
+    variants = {
+        variant: _context_task_variant_metrics([row for row in rows if row["variant"] == variant])
+        for variant in CONTEXT_TASK_VARIANTS
+    }
+    context_rows = [row for row in rows if row["context_sensitive"]]
+    context_variants = {
+        variant: _context_task_variant_metrics([row for row in context_rows if row["variant"] == variant])
+        for variant in CONTEXT_TASK_VARIANTS
+    }
+    result = {
+        "schema_version": 2,
+        "suite": "context_task_completion_ablation",
+        "status": MEASURED if rows else NOT_MEASURED,
+        "method": "full_task_completion_context_on_off",
+        "task_count": len({row["task_id"] for row in rows}),
+        "context_sensitive_task_count": len({row["task_id"] for row in context_rows}),
+        "variants": variants,
+        "context_sensitive_variants": context_variants,
+        "deltas": _context_task_deltas(variants),
+        "context_sensitive_deltas": _context_task_deltas(context_variants),
+        "rows": rows,
+    }
+    result["pico_metrics"] = _context_task_pico_metrics(result)
+    benchmark_artifacts.write_json(run_root / "context-task-ablation-v2.json", result)
+    return result
+
+
+def _run_context_task_variant(
+    *,
+    run_root: Path,
+    task_file: Path,
+    suite: str,
+    timeout: int,
+    model: str | None,
+    stream: bool,
+    variant: str,
+    context_governance: str,
+) -> dict[str, Any]:
+    runner = _load_runner()
+    output_root = run_root / "context-task-ablation-runs"
+    return runner.run_benchmark(
+        Namespace(
+            task_file=str(task_file),
+            output_root=str(output_root),
+            run_name=variant,
+            task_id=None,
+            suite=suite,
+            limit=None,
+            timeout=timeout,
+            model=model,
+            stream=stream,
+            dry_run=False,
+            context_governance=context_governance,
+        )
+    )
+
+
+def _context_task_rows_from_benchmark(
+    benchmark_artifact: dict[str, Any] | None,
+    variant: str,
+) -> list[dict[str, Any]]:
+    if not isinstance(benchmark_artifact, dict):
+        return []
+    rows = benchmark_artifact.get("rows")
+    if not isinstance(rows, list):
+        return []
+
+    result: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        report_summary = row.get("report_summary") if isinstance(row.get("report_summary"), dict) else {}
+        usage = report_summary.get("usage") if isinstance(report_summary.get("usage"), dict) else {}
+        result.append({
+            "task_id": str(row.get("id") or ""),
+            "category": str(row.get("category") or ""),
+            "tags": list(row.get("tags") or []),
+            "variant": variant,
+            "context_governance": "off" if variant == "context_off" else "full",
+            "context_sensitive": _is_context_sensitive_row(row),
+            "task_completion_pass": _task_completion_pass(row),
+            "original_passed": bool(row.get("passed")),
+            "verifier_passed": bool(row.get("verifier_passed")),
+            "within_budget": bool(row.get("within_budget")),
+            "non_failure_stop_reason": bool(row.get("non_failure_stop_reason")),
+            "stop_reason": str(row.get("stop_reason") or ""),
+            "failure_category": _task_completion_failure_category(row),
+            "tool_steps": int(row.get("tool_steps", 0) or 0),
+            "attempts": int(row.get("attempts", 0) or 0),
+            "input_tokens": int(usage.get("input_tokens", 0) or 0),
+            "output_tokens": int(usage.get("output_tokens", 0) or 0),
+            "estimated_cost_usd": float(usage.get("estimated_cost_usd", 0.0) or 0.0),
+            "large_result_persist_count": int(row.get("large_result_persist_count", 0) or 0),
+            "tool_history_snip_count": int(row.get("tool_history_snip_count", 0) or 0),
+            "context_compact_count": int(row.get("context_compact_count", 0) or 0),
+            "context_contract_met": bool(row.get("context_contract_met", True)),
+        })
+    return result
+
+
+def _task_completion_pass(row: dict[str, Any]) -> bool:
+    if "task_completion_pass" in row:
+        return bool(row["task_completion_pass"])
+    non_context_specialty = bool(
+        row.get("security_contract_met", True)
+        and row.get("memory_contract_met", True)
+        and row.get("resume_contract_met", True)
+        and row.get("tool_path_limit_contract_met", True)
+    )
+    return bool(
+        row.get("nanocode_returncode") == 0
+        and row.get("verifier_passed")
+        and row.get("report_exists")
+        and row.get("report_parse_valid")
+        and row.get("expected_artifact_exists")
+        and row.get("trace_contract_met")
+        and row.get("within_budget")
+        and row.get("non_failure_stop_reason")
+        and row.get("allowed_tools_enforced")
+        and non_context_specialty
+    )
+
+
+def _task_completion_failure_category(row: dict[str, Any]) -> str:
+    if _task_completion_pass(row):
+        return ""
+    if row.get("nanocode_returncode") not in (0, None):
+        return "nanocode_failed"
+    if not row.get("report_exists"):
+        return "missing_report"
+    if not row.get("report_parse_valid"):
+        return "invalid_report"
+    if not row.get("trace_exists"):
+        return "missing_trace"
+    if not row.get("trace_parse_valid"):
+        return "invalid_trace"
+    if not row.get("trace_contract_met", True):
+        return "trace_contract_failed"
+    if not row.get("non_failure_stop_reason"):
+        return "bad_stop_reason"
+    if not row.get("within_budget"):
+        return "budget_exceeded"
+    if not row.get("allowed_tools_enforced", True):
+        return "disallowed_tool_executed"
+    if not row.get("expected_artifact_exists"):
+        return "missing_artifact"
+    if not row.get("verifier_passed"):
+        return "verifier_failed"
+    if not row.get("security_contract_met", True):
+        return "security_contract_failed"
+    if not row.get("memory_contract_met", True):
+        return "memory_contract_failed"
+    if not row.get("resume_contract_met", True):
+        return "resume_contract_failed"
+    if not row.get("tool_path_limit_contract_met", True):
+        return "tool_path_limit_contract_failed"
+    return "unknown"
+
+
+def _is_context_sensitive_row(row: dict[str, Any]) -> bool:
+    tags = set(row.get("tags") or [])
+    return str(row.get("category") or "") == "context-governance" or bool(tags & CONTEXT_SENSITIVE_TAGS)
+
+
+def _context_task_variant_metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    total = len(rows)
+    task_passes = sum(1 for row in rows if row["task_completion_pass"])
+    original_passes = sum(1 for row in rows if row["original_passed"])
+    verifier_passes = sum(1 for row in rows if row["verifier_passed"])
+    within_budget = sum(1 for row in rows if row["within_budget"])
+    return {
+        "run_count": total,
+        "task_completion_pass_count": task_passes,
+        "task_completion_pass_rate": _safe_rate(task_passes, total),
+        "original_pass_count": original_passes,
+        "original_pass_rate": _safe_rate(original_passes, total),
+        "verifier_pass_count": verifier_passes,
+        "verifier_pass_rate": _safe_rate(verifier_passes, total),
+        "within_budget_count": within_budget,
+        "within_budget_rate": _safe_rate(within_budget, total),
+        "avg_tool_steps": _mean(int(row["tool_steps"]) for row in rows),
+        "avg_attempts": _mean(int(row["attempts"]) for row in rows),
+        "avg_input_tokens": _mean(int(row["input_tokens"]) for row in rows),
+        "avg_output_tokens": _mean(int(row["output_tokens"]) for row in rows),
+        "total_input_tokens": sum(int(row["input_tokens"]) for row in rows),
+        "total_output_tokens": sum(int(row["output_tokens"]) for row in rows),
+        "total_estimated_cost_usd": sum(float(row["estimated_cost_usd"]) for row in rows),
+        "large_result_persist_count": sum(int(row["large_result_persist_count"]) for row in rows),
+        "tool_history_snip_count": sum(int(row["tool_history_snip_count"]) for row in rows),
+        "context_compact_count": sum(int(row["context_compact_count"]) for row in rows),
+        "stop_reason_counts": dict(sorted(Counter(row["stop_reason"] for row in rows).items())),
+        "failure_category_counts": dict(sorted(Counter(
+            row["failure_category"] for row in rows if row["failure_category"]
+        ).items())),
+    }
+
+
+def _context_task_deltas(variants: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    on = variants.get("context_on") or {}
+    off = variants.get("context_off") or {}
+    return {
+        "task_completion_pass_rate_delta_on_minus_off": float(on.get("task_completion_pass_rate", 0.0) or 0.0)
+        - float(off.get("task_completion_pass_rate", 0.0) or 0.0),
+        "verifier_pass_rate_delta_on_minus_off": float(on.get("verifier_pass_rate", 0.0) or 0.0)
+        - float(off.get("verifier_pass_rate", 0.0) or 0.0),
+        "avg_input_tokens_delta_off_minus_on": float(off.get("avg_input_tokens", 0.0) or 0.0)
+        - float(on.get("avg_input_tokens", 0.0) or 0.0),
+        "avg_tool_steps_delta_off_minus_on": float(off.get("avg_tool_steps", 0.0) or 0.0)
+        - float(on.get("avg_tool_steps", 0.0) or 0.0),
+    }
+
+
+def _context_task_pico_metrics(result: dict[str, Any]) -> dict[str, Any]:
+    variants = result.get("variants") if isinstance(result.get("variants"), dict) else {}
+    context_variants = (
+        result.get("context_sensitive_variants")
+        if isinstance(result.get("context_sensitive_variants"), dict)
+        else {}
+    )
+    return {
+        "all_tasks": {
+            variant: {
+                "task_completion_pass_rate": data.get("task_completion_pass_rate", 0.0),
+                "verifier_pass_rate": data.get("verifier_pass_rate", 0.0),
+                "within_budget_rate": data.get("within_budget_rate", 0.0),
+                "avg_input_tokens": data.get("avg_input_tokens", 0.0),
+                "avg_tool_steps": data.get("avg_tool_steps", 0.0),
+            }
+            for variant, data in variants.items()
+        },
+        "context_sensitive_tasks": {
+            variant: {
+                "task_completion_pass_rate": data.get("task_completion_pass_rate", 0.0),
+                "verifier_pass_rate": data.get("verifier_pass_rate", 0.0),
+                "within_budget_rate": data.get("within_budget_rate", 0.0),
+                "avg_input_tokens": data.get("avg_input_tokens", 0.0),
+                "avg_tool_steps": data.get("avg_tool_steps", 0.0),
+            }
+            for variant, data in context_variants.items()
+        },
+        "deltas": result.get("deltas") or {},
+        "context_sensitive_deltas": result.get("context_sensitive_deltas") or {},
+    }
 
 
 def run_memory_ablation(
@@ -1587,6 +1912,20 @@ def run_ablation(args: Namespace) -> dict[str, Any]:
     )
     benchmark_artifact = _benchmark_artifact_for_ablation(harness)
     context = run_context_ablation(run_root=run_root)
+    context_on_artifact = benchmark_artifact
+    context_on_arg = getattr(args, "context_on_artifact", None)
+    if context_on_artifact is None and context_on_arg:
+        context_on_artifact = benchmark_artifacts.read_json_optional(Path(context_on_arg))
+    context_task = run_context_task_completion_ablation(
+        run_root=run_root,
+        task_file=Path(args.task_file),
+        suite=args.suite,
+        timeout=int(args.timeout),
+        model=args.model,
+        stream=bool(args.stream),
+        execute=bool(getattr(args, "run_context_task_ablation", False) and not args.dry_run),
+        context_on_artifact=context_on_artifact,
+    )
     memory = run_memory_ablation(
         run_root=run_root,
         repetitions=int(args.repetitions),
@@ -1616,10 +1955,11 @@ def run_ablation(args: Namespace) -> dict[str, Any]:
             "run_name": str(args.run_name),
             "run_root": str(run_root),
         },
-        "summary": _ablation_summary(harness, context, memory, recovery),
+        "summary": _ablation_summary(harness, context, context_task, memory, recovery),
         "suites": {
             "harness_regression": harness,
             "context_ablation": context,
+            "context_task_completion_ablation": context_task,
             "working_memory_ablation": memory,
             "recovery_resume_ablation": recovery,
         },
@@ -1640,22 +1980,46 @@ def _benchmark_artifact_for_ablation(harness: dict[str, Any]) -> dict[str, Any] 
 def _ablation_summary(
     harness: dict[str, Any],
     context: dict[str, Any],
+    context_task: dict[str, Any],
     memory: dict[str, Any],
     recovery: dict[str, Any],
 ) -> dict[str, Any]:
     memory_variants = memory.get("variants") if isinstance(memory.get("variants"), dict) else {}
+    context_task_variants = (
+        context_task.get("variants")
+        if isinstance(context_task.get("variants"), dict)
+        else {}
+    )
+    context_on = context_task_variants.get("context_on") or {}
+    context_off = context_task_variants.get("context_off") or {}
     recovery_e2e = recovery.get("e2e_variants") if isinstance(recovery.get("e2e_variants"), dict) else {}
     recovery_primitive = recovery.get("primitive_variants") if isinstance(recovery.get("primitive_variants"), dict) else {}
     recovery_enabled = recovery_e2e.get("resume_enabled") or recovery_primitive.get("resume_enabled") or {}
     return {
         "harness_pass_rate": harness.get("pico_metrics", {}).get("pass_rate", 0.0),
         "harness_task_count": harness.get("pico_metrics", {}).get("task_count", 0),
-        "context_avg_prompt_compression_ratio": context.get("avg_prompt_compression_ratio", 0.0),
-        "context_baseline_avg_prompt_compression_ratio": context.get("baseline_avg_prompt_compression_ratio", 0.0),
-        "context_pressure_avg_prompt_compression_ratio": context.get("pressure_avg_prompt_compression_ratio", 0.0),
+        "context_avg_prompt_estimated_token_compression_ratio": context.get(
+            "avg_prompt_estimated_token_compression_ratio",
+            0.0,
+        ),
+        "context_baseline_avg_prompt_estimated_token_compression_ratio": context.get(
+            "baseline_avg_prompt_estimated_token_compression_ratio",
+            0.0,
+        ),
+        "context_pressure_avg_prompt_estimated_token_compression_ratio": context.get(
+            "pressure_avg_prompt_estimated_token_compression_ratio",
+            0.0,
+        ),
         "context_current_request_preserved_rate": context.get("current_request_preserved_rate", 0.0),
         "context_pressure_compact_count": context.get("pressure_context_compact_count", 0),
         "context_forced_compact_count": context.get("forced_context_compact_count", 0),
+        "context_task_status": context_task.get("status", NOT_MEASURED),
+        "context_on_task_completion_pass_rate": context_on.get("task_completion_pass_rate", 0.0),
+        "context_off_task_completion_pass_rate": context_off.get("task_completion_pass_rate", 0.0),
+        "context_task_avg_input_tokens_delta_off_minus_on": (context_task.get("deltas") or {}).get(
+            "avg_input_tokens_delta_off_minus_on",
+            0.0,
+        ),
         "memory_status": memory.get("status", NOT_MEASURED),
         "memory_on_repeated_reads": (memory_variants.get("memory_on") or {}).get("repeated_reads", 0),
         "memory_off_repeated_reads": (memory_variants.get("memory_off") or {}).get("repeated_reads", 0),
@@ -1669,6 +2033,7 @@ def _render_report(artifact: dict[str, Any]) -> str:
     suites = artifact["suites"]
     harness = suites["harness_regression"]
     context = suites["context_ablation"]
+    context_task = suites["context_task_completion_ablation"]
     memory = suites["working_memory_ablation"]
     recovery = suites["recovery_resume_ablation"]
     lines = [
@@ -1693,11 +2058,17 @@ def _render_report(artifact: dict[str, Any]) -> str:
         f"- Tool Result Budget mix: `{context['tool_result_budget_ratio']}` "
         "(small read / medium read / large search / CI log)",
         f"- Measurement unit: `{context['measurement_unit']}`",
-        f"- Overall average raw conversation chars: {context['context_management_four_level']['avg_raw_prompt_chars']:.1f}",
-        f"- Overall average governed conversation chars: {context['context_management_four_level']['avg_full_prompt_chars']:.1f}",
-        f"- Overall average compression ratio: {_format_rate(context['context_management_four_level']['avg_prompt_compression_ratio'])}",
-        f"- Baseline average compression ratio: {_format_rate(context['baseline_avg_prompt_compression_ratio'])}",
-        f"- Pressure scenarios average compression ratio: {_format_rate(context['pressure_avg_prompt_compression_ratio'])}",
+        "- Token counts use NanoCode's provider-neutral local estimator, not provider-exact billing tokens.",
+        "- Overall average raw estimated tokens: "
+        f"{context['context_management_four_level']['avg_raw_prompt_estimated_tokens']:.1f}",
+        "- Overall average governed estimated tokens: "
+        f"{context['context_management_four_level']['avg_governed_prompt_estimated_tokens']:.1f}",
+        "- Overall average estimated-token compression ratio: "
+        f"{_format_rate(context['context_management_four_level']['avg_prompt_estimated_token_compression_ratio'])}",
+        "- Baseline average estimated-token compression ratio: "
+        f"{_format_rate(context['baseline_avg_prompt_estimated_token_compression_ratio'])}",
+        "- Pressure scenarios average estimated-token compression ratio: "
+        f"{_format_rate(context['pressure_avg_prompt_estimated_token_compression_ratio'])}",
         f"- Current request preserved rate: {_format_rate(context['current_request_preserved_rate'])}",
         f"- Large result persist count: {context['large_result_persist_count']}",
         f"- Tool result snip count: {context['snipped_tool_result_count']}",
@@ -1706,12 +2077,13 @@ def _render_report(artifact: dict[str, Any]) -> str:
         "",
         "### Context Scenarios",
         "",
-        "| Scenario | Configs | Avg Compression | Trigger Rate | Persist Rate | Snip Rate | Compact Rate |",
+        "| Scenario | Configs | Avg Estimated Token Compression | Trigger Rate | Persist Rate | Snip Rate | Compact Rate |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for scenario, data in context["scenarios"].items():
         lines.append(
-            f"| {scenario} | {data['config_count']} | {_format_rate(data['avg_prompt_compression_ratio'])} | "
+            f"| {scenario} | {data['config_count']} | "
+            f"{_format_rate(data['avg_prompt_estimated_token_compression_ratio'])} | "
             f"{_format_rate(data['compression_triggered_rate'])} | "
             f"{_format_rate(data['large_result_persist_trigger_rate'])} | "
             f"{_format_rate(data['tool_history_snip_trigger_rate'])} | "
@@ -1721,14 +2093,49 @@ def _render_report(artifact: dict[str, Any]) -> str:
         "",
         "### Tool Result Budget Mix",
         "",
-        "| Case | Configs | Avg Compression | Persist Rate |",
+        "| Case | Configs | Avg Estimated Token Compression | Persist Rate |",
         "| --- | ---: | ---: | ---: |",
     ])
     for name, data in context["tool_result_budget_mix"].items():
         lines.append(
             f"| {name} | {data['config_count']} | "
-            f"{_format_rate(data['avg_prompt_compression_ratio'])} | "
+            f"{_format_rate(data['avg_prompt_estimated_token_compression_ratio'])} | "
             f"{_format_rate(data['large_result_persist_trigger_rate'])} |"
+        )
+    lines.extend([
+        "",
+        "## Context Task Completion Ablation",
+        "",
+        f"- Status: `{context_task['status']}`",
+        "- `task_completion_pass` excludes context-governance event contracts so context_off is not penalized for disabling those events.",
+        "",
+        "### All Tasks",
+        "",
+        "| Variant | Runs | Task Completion | Verifier Pass | Within Budget | Avg Input Tokens | Avg Tool Steps | Persist | Snip | Compact |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
+    for variant, data in context_task["variants"].items():
+        lines.append(
+            f"| {variant} | {data['run_count']} | {_format_rate(data['task_completion_pass_rate'])} | "
+            f"{_format_rate(data['verifier_pass_rate'])} | {_format_rate(data['within_budget_rate'])} | "
+            f"{data['avg_input_tokens']:.1f} | {data['avg_tool_steps']:.2f} | "
+            f"{data['large_result_persist_count']} | {data['tool_history_snip_count']} | "
+            f"{data['context_compact_count']} |"
+        )
+    lines.extend([
+        "",
+        "### Context-Sensitive Tasks",
+        "",
+        "| Variant | Runs | Task Completion | Verifier Pass | Within Budget | Avg Input Tokens | Avg Tool Steps | Persist | Snip | Compact |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ])
+    for variant, data in context_task["context_sensitive_variants"].items():
+        lines.append(
+            f"| {variant} | {data['run_count']} | {_format_rate(data['task_completion_pass_rate'])} | "
+            f"{_format_rate(data['verifier_pass_rate'])} | {_format_rate(data['within_budget_rate'])} | "
+            f"{data['avg_input_tokens']:.1f} | {data['avg_tool_steps']:.2f} | "
+            f"{data['large_result_persist_count']} | {data['tool_history_snip_count']} | "
+            f"{data['context_compact_count']} |"
         )
     lines.extend([
         "",
@@ -1804,8 +2211,15 @@ def _render_provenance(artifact: dict[str, Any]) -> str:
         "- Level 2 cases use Compressor.prepare_context_for_provider() under pressure to trigger Tool History Snip without compact.",
         "- Level 3 cases use long-chain realistic workflows under a constrained context window to trigger Context Compact.",
         "- Overall, baseline, and pressure-scenario compression ratios are reported separately to avoid treating stress compression as daily average behavior.",
-        "- Character counts are provider-neutral conversation snapshot sizes, not provider wire payload sizes.",
+        "- Token counts use NanoCode's provider-neutral local estimator from `agent.budget`; they are not provider-exact billing tokens.",
         "- The current request is counted as preserved only when the exact request text remains after natural governance.",
+        "",
+        "## Context Task Completion Ablation",
+        "",
+        "- Runs the same local-fixture task suite with context governance on/off when explicitly enabled.",
+        "- `context_on` uses normal NanoCode behavior; `context_off` sets `NANO_CODE_CONTEXT_GOVERNANCE=off`.",
+        "- Task completion pass keeps verifier, budget, stop reason, trace/report, allowlist, security, memory, resume, and tool-path contracts, but excludes context-governance event contracts.",
+        "- Reports all tasks and context-sensitive tasks separately so non-context tasks do not dilute context behavior.",
         "",
         "## Working Memory Ablation",
         "",
@@ -1835,6 +2249,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--recovery-repetitions", type=int, default=3)
     parser.add_argument("--skip-harness", action="store_true")
     parser.add_argument("--harness-artifact", default=None)
+    parser.add_argument(
+        "--run-context-task-ablation",
+        action="store_true",
+        help="Run full task completion context_on/context_off ablation.",
+    )
+    parser.add_argument(
+        "--context-on-artifact",
+        default=None,
+        help="Optional existing benchmark.json for the context_on side of context task completion ablation.",
+    )
     parser.add_argument("--run-memory-ablation", action="store_true", help="Run generated memory on/off/irrelevant tasks.")
     parser.add_argument("--run-resume-ablation", action="store_true", help="Run generated resume enabled/disabled tasks.")
     parser.add_argument("--dry-run", action="store_true", help="Write deterministic ablations without running NanoCode.")
