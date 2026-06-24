@@ -6,20 +6,20 @@
 
 当前架构中：
 
-- 上下文构建位于 `agent/harness/context/`。
-- 消息压缩位于 `agent/harness/compressor.py`。
+- 上下文构建位于 `agent/runtime_management/context/`。
+- 消息压缩位于 `agent/runtime_management/compressor.py`。
 - 单个工具大结果持久化位于 `cli/core/tools/runtime.py`。
-- 模型摘要 callable 由 `cli/session.py` 注入 Compressor，harness 不 import provider。
+- 模型摘要 callable 由 `cli/session.py` 注入 Compressor，Runtime Management 不 import provider。
 
 ## 2. 文件结构
 
 ```
-agent/harness/context/
+agent/runtime_management/context/
 ├── __init__.py
 ├── builder.py    # stable system prompt、startup context、动态附件 render
 └── sources.py    # AGENTS.md、.nanocode/rules、Git 快照、frontmatter
 
-agent/harness/
+agent/runtime_management/
 ├── compressor.py
 └── message_view.py
 ```
@@ -110,7 +110,7 @@ Level 3  Context Compact     摘要旧上下文，保留最近原文，并恢复
 
 ### Level 2: Tool History Snip
 
-位置：`agent/harness/compressor.py`
+位置：`agent/runtime_management/compressor.py`
 
 触发点：每次 provider call 前。
 
@@ -133,7 +133,7 @@ or now - last_api_call_time >= SNIP_IDLE_SECONDS
 
 ### Level 3: Context Compact
 
-位置：`agent/harness/compressor.py`
+位置：`agent/runtime_management/compressor.py`
 
 触发：Tool History Snip 之后，估算 conversation 仍超过 compact 阈值，或用户手动 `/compact`。
 
@@ -198,7 +198,7 @@ Compressor(
 )
 ```
 
-这样 harness 仍然只依赖 agent core。
+这样 Runtime Management 仍然只依赖 Agent Core。
 
 ## 9. 设计决策
 
@@ -253,10 +253,10 @@ system prompt 变化会影响缓存，也会混淆稳定规则和当前状态。
 ## 12. 代码导读
 
 ```
-agent/harness/context/builder.py
-agent/harness/context/sources.py
-agent/harness/message_view.py
-agent/harness/compressor.py
+agent/runtime_management/context/builder.py
+agent/runtime_management/context/sources.py
+agent/runtime_management/message_view.py
+agent/runtime_management/compressor.py
 cli/core/tools/recent_files.py
 cli/core/tools/runtime.py::_persist_large_result
 cli/session.py::_summarize_messages

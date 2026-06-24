@@ -18,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from ....agent.harness.persistence.atomic import write_text_atomic
+from ....agent.runtime_management.persistence.atomic import write_text_atomic
 from ...logging_config import get_logger
 from ..memory.store import sync_memory_file
 from .types import (

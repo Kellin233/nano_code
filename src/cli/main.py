@@ -110,7 +110,7 @@ def _restore_if_requested(session, args) -> None:
 def _resume_thread_id(args) -> str | None:
     if not args.resume:
         return None
-    from ..agent.harness.persistence import get_latest_session_id
+    from ..agent.runtime_management.persistence import get_latest_session_id
     from ..tui.renderer import get_renderer
 
     session_id = get_latest_session_id()

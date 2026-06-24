@@ -13,7 +13,7 @@
 - `cli/thread.py` 负责把 `AgentSession` 包成 server/TUI 可消费的事件流，并处理 approvals。
 - `tui/` 负责交互式 REPL 和渲染。
 - `cli/core/server/` 和 `cli/core/protocol/` 负责 JSONL 协议 server。
-- `agent/harness/persistence/` 负责 session log、run trace/report 和 artifact 持久化。
+- `agent/runtime_management/persistence/` 负责 session log、run trace/report 和 artifact 持久化。
 
 ## 2. 文件结构
 
@@ -41,7 +41,7 @@ tui/
 ├── state.py
 └── theme.py
 
-agent/harness/persistence/
+agent/runtime_management/persistence/
 ├── atomic.py           # 原子写入和 JSONL append
 ├── session_log.py      # session.jsonl checkpoint/resume
 ├── session_store.py    # list/load/latest session
@@ -163,7 +163,7 @@ Server 不创建第二套 runtime。它通过 `RuntimeThread.submit()` 消费同
 - MCP 工具变更到 ToolRegistry 和动态附件。
 - memory startup context 与 `/remember` 写入。
 
-`AgentSession` 文件会比普通模块更“胶水化”，这是设计选择：装配复杂度集中在一个地方，Agent core、provider、harness 和能力模块都保持边界清晰。
+`AgentSession` 文件会比普通模块更“胶水化”，这是设计选择：装配复杂度集中在一个地方，Agent Core、provider adapter、Runtime Management 和能力模块都保持边界清晰。
 
 装配顺序也体现依赖方向：先构造 `Agent` 和 provider，再构造工具、sandbox、MCP、skills、memory、hooks、compressor，最后把 callable 注入 `AgentLoop`。`AgentLoop` 只知道“如何调用 provider、如何执行工具、如何在 provider call 前准备 context”，不知道这些 callable 背后是 TUI、server、memory 还是 MCP。
 
@@ -176,7 +176,7 @@ Server 不创建第二套 runtime。它通过 `RuntimeThread.submit()` 消费同
 - 给 server/TUI 暴露 `submit()`、`abort()`、`compact()`、`clear_history()`、`restore_from_persistence()`。
 - 把内部异常转换成 `runtime.error` 和 `turn.finished(error)` 事件。
 
-协议层 approvals 由 `RuntimeThread` 管理；工具权限判断仍在 `ToolRuntime` + `agent/harness/permissions/`。
+协议层 approvals 由 `RuntimeThread` 管理；工具权限判断仍在 `ToolRuntime` + `agent/runtime_management/permissions/`。
 
 普通 CLI 一次性模式不走 `RuntimeThread`，而是在 `cli/main.py` 里给 `AgentSession` 设置同步 confirm 函数；TUI 直接持有 `AgentSession`。Server/headless 通道才使用 `RuntimeThread` 的 event queue 和 `ApprovalManager`。
 
@@ -359,7 +359,7 @@ ToolRuntime 只把 `<persisted-output>` 预览和 artifact metadata 放回 `Tool
 | trace/report 写入失败 | 不应替代 session log；恢复仍以 `session.jsonl` 为准 |
 | `unix_socket` / `websocket` transport | 初始化即 `NotImplementedError`，不能作为可用 server transport |
 
-这些边界说明 CLI/TUI/server 的职责是“接入和观测”，不是改变 AgentLoop 的语义。权限、sandbox、context、MCP、memory 都经由 `AgentSession` 装配后进入同一条 core/harness 链路。
+这些边界说明 CLI/TUI/server 的职责是“接入和观测”，不是改变 AgentLoop 的语义。权限、sandbox、context、MCP、memory 都经由 `AgentSession` 装配后进入同一条 Agent Core / Runtime Management 链路。
 
 ## 13. Benchmark 覆盖
 
@@ -408,7 +408,7 @@ cli/core/server/app_server.py
 cli/core/protocol/messages.py
 cli/core/server/transports/stdio.py
 tui/app.py
-agent/harness/persistence/session_log.py
-agent/harness/persistence/run_store.py
-agent/harness/persistence/report.py
+agent/runtime_management/persistence/session_log.py
+agent/runtime_management/persistence/run_store.py
+agent/runtime_management/persistence/report.py
 ```

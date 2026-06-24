@@ -4,7 +4,7 @@
 
 模型生成的工具调用可能危险，例如写 `.env`、改 `.git`、执行破坏性 shell。权限系统在工具执行前判断：允许、拒绝，还是请求用户确认。
 
-权限位于 `agent/harness/permissions/`，因为它是 Agent 运转的横切机制。真正触发权限检查的是应用层的 `ToolRuntime`，位于 `cli/core/tools/runtime.py`。
+权限位于 `agent/runtime_management/permissions/`，因为它是 Agent 运转的横切机制。真正触发权限检查的是应用层的 `ToolRuntime`，位于 `cli/core/tools/runtime.py`。
 
 权限和 sandbox 是两层独立防线：
 
@@ -16,7 +16,7 @@
 ## 2. 文件结构
 
 ```
-agent/harness/permissions/
+agent/runtime_management/permissions/
 ├── __init__.py
 ├── policy.py        # check_permission() 统一入口
 ├── tool_policy.py   # per-run allowed_tools 白名单
@@ -39,7 +39,7 @@ cli/core/tools/runtime.py: ToolRuntime.execute_one()
     └── PostToolUse hooks
 ```
 
-权限模块不 import ToolRuntime。ToolRuntime import 权限模块并调用它，符合“应用层使用 harness”的依赖方向。
+权限模块不 import ToolRuntime。ToolRuntime import 权限模块并调用它，符合“Application Layer 使用 Runtime Management”的依赖方向。
 
 `allowed_tools` 是第一道运行级工具白名单。它不是用户确认策略，而是 Benchmark、server 或 CLI 为本次运行声明的硬边界：
 
@@ -154,9 +154,9 @@ workspace 外写入在 path policy 中直接拒绝。workspace 外读取会确�
 
 ## 8. 设计决策
 
-### 为什么权限放在 harness
+### 为什么权限放在 Runtime Management
 
-权限不是某个具体工具的能力，而是所有工具执行前的横切机制。放在 harness 后，ToolRuntime 可以调用它，Agent core 不需要知道权限系统存在。
+权限不是某个具体工具的能力，而是所有工具执行前的横切机制。放在 Runtime Management 后，ToolRuntime 可以调用它，Agent Core 不需要知道权限系统存在。
 
 ### 为什么权限和 sandbox 不合并
 
@@ -191,10 +191,10 @@ Benchmark 同时区分 `allowed_tools_respected` 和 `allowed_tools_enforced`：
 ## 11. 代码导读
 
 ```
-agent/harness/permissions/tool_policy.py
-agent/harness/permissions/workspace.py
-agent/harness/permissions/rules.py
-agent/harness/permissions/shell.py
-agent/harness/permissions/policy.py
+agent/runtime_management/permissions/tool_policy.py
+agent/runtime_management/permissions/workspace.py
+agent/runtime_management/permissions/rules.py
+agent/runtime_management/permissions/shell.py
+agent/runtime_management/permissions/policy.py
 cli/core/tools/runtime.py
 ```

@@ -8,11 +8,11 @@ NanoCode 的定位是终端里的轻量编程 Agent。它支持 Anthropic 和 Op
 
 当前实现的设计偏好是：**轻量、可学习、可审计、分层明确**。核心不是把所有能力塞进 Agent，而是让 Agent core 保持纯净，由应用层按需装配能力。
 
-理解 NanoCode 时可以把它当成三件事的组合：
+理解 NanoCode 时可以把它当成三层的组合：
 
-1. 一个 provider-neutral 的 Agent 状态机，负责“什么时候问模型、什么时候执行工具、什么时候结束”。
-2. 一套 harness，负责“让状态机安全、可恢复、可压缩、可审计地运转”。
-3. 一组应用能力，负责“Agent 实际能做什么”，例如文件工具、shell sandbox、MCP、skills、memory、sub-agent、server/TUI。
+1. **Agent Core**：provider-neutral 的 Agent 状态机和协议，负责“什么时候问模型、什么时候执行工具、什么时候结束”。
+2. **Runtime Management**：运行过程管理，负责“让状态机安全、可恢复、可压缩、可审计地运转”。
+3. **Application Layer**：应用能力和装配，负责“Agent 实际能做什么”，例如 provider、文件工具、shell sandbox、MCP、skills、memory、sub-agent、CLI/TUI/Server。
 
 这三个层次的分离是后面所有模块设计的基础。很多看似分散的实现选择，例如 `ToolRuntime` 不放进 `AgentLoop`、`Compressor` 通过 callable 调模型、MCP 工具默认 deferred，本质都是为了保持这个边界。
 
@@ -24,9 +24,9 @@ NanoCode 的定位是终端里的轻量编程 Agent。它支持 Anthropic 和 Op
 |------|------|
 | 分层单向依赖 | 下层不主动 import 上层。Agent core 不知道 CLI/TUI/工具/Provider 的存在，上层通过回调和装配把能力接进来 |
 | Agent core 只管状态机和协议 | `agent/agent.py`、`agent/loop.py`、`agent/events.py`、`agent/types.py`、`agent/models.py`、`agent/budget.py` 描述 Agent 状态、对话历史、工具调用、运行事件、模型窗口和预算估算 |
-| Harness 只管怎么运转 | `agent/harness/` 放上下文、压缩、权限、hooks、approvals、session/run/artifact 持久化。它可以 I/O，但不依赖 `cli/`、`tui/`、`providers/` |
-| 应用层管能力和装配 | `cli/session.py` 是唯一总装配点；`cli/core/` 持有 tools、sandbox、skills、memory、MCP、subagents、server/protocol、extensions 等能力和适配模块 |
-| Provider 层独立 | `providers/` 把 Anthropic/OpenAI-compatible 差异统一成 `BackendResponse`，只依赖 `agent/types.py`、`agent/models.py` 的纯 helper 和自己的 SDK |
+| Runtime Management 管运行过程 | `agent/runtime_management/` 放上下文、压缩、权限、hooks、approvals、session/run/artifact 持久化。它可以 I/O，但不依赖 `cli/`、`tui/`、`providers/` |
+| Application Layer 管能力和装配 | `cli/session.py` 是唯一总装配点；`providers/` 和 `cli/core/` 提供 provider、tools、sandbox、skills、memory、MCP、subagents、server/protocol、extensions 等能力和适配模块 |
+| Provider adapter 独立 | `providers/` 把 Anthropic/OpenAI-compatible 差异统一成 `BackendResponse`，只依赖 `agent/types.py`、`agent/models.py` 的纯 helper 和自己的 SDK |
 | 扩展点通过窄接口接入 | Agent 暴露 runtime callback，Loop 消费 `execute_tools`、`prepare_context_for_provider` 等注入函数；下层不 import 具体扩展系统 |
 | 可恢复可审计 | session 通过 append-only `session.jsonl` 恢复；每次请求都有 `.nanocode/runs/<run_id>/trace.jsonl` 和 `report.json` |
 
@@ -35,7 +35,7 @@ NanoCode 的定位是终端里的轻量编程 Agent。它支持 Anthropic 和 Op
 | # | 约束 | 当前代码对应边界 |
 |:---:|------|------|
 | C1 | Agent core 不 import 文件系统、网络、第三方 SDK、`cli/`、`tui/`、`providers/` | `agent/agent.py`、`loop.py`、`events.py`、`types.py`、`models.py`、`budget.py` 只依赖标准库和 `agent` 内部模块 |
-| C2 | `agent/harness/` 不 import `cli/`、`tui/`、`providers/` | harness 只依赖 `agent/types.py` 和 harness 内部包；需要 LLM 摘要时由 `cli/session.py` 注入 callable |
+| C2 | `agent/runtime_management/` 不 import `cli/`、`tui/`、`providers/` | Runtime Management 只依赖 `agent/types.py` 和 Runtime Management 内部包；需要 LLM 摘要时由 `cli/session.py` 注入 callable |
 | C3 | 核心协议类型只有一份 | `ToolDef`、`ToolCall`、`ToolResult`、`RuntimeEvent` 定义在 `agent/types.py`；工具层从这里 import，不重复定义 |
 | C4 | Provider 差异不扩散 | Anthropic/OpenAI 消息转换、tool call 解析、usage 归一都在 `providers/` 内；Loop 只看到 `Backend.call()` |
 | C5 | 工具必须经过统一管线 | 工具调用统一走 `ToolRuntime`：allowlist、参数校验、PreToolUse hook、权限、确认、执行、结果落盘、PostToolUse hook |
@@ -46,27 +46,29 @@ NanoCode 的定位是终端里的轻量编程 Agent。它支持 Anthropic 和 Op
 
 ## 4. 架构全景
 
-当前实现可以按四个主要区域理解：
+当前实现按三层理解：
 
 ```text
-表现与装配层
+Application Layer
   cli/main.py      tui/        cli/core/server/
        \            |              /
         \           |             /
          └──── cli/session.py ───┘
                   AgentSession：唯一总装配点
                     │
+                    ├── providers/
+                    │   base / anthropic / openai
+                    │
                     ├── cli/core/
                     │   tools / sandbox / skills / memory / mcp
                     │   subagents / server / protocol / extensions
                     │
-                    ├── providers/
-                    │   base / anthropic / openai
-                    │
-                    ├── agent/harness/
+Runtime Management  │
+                    ├── agent/runtime_management/
                     │   context / compressor / persistence
                     │   permissions / hooks / approvals
                     │
+Agent Core          │
                     └── agent/
                         Agent / AgentLoop / RuntimeEvent / core types
 ```
@@ -100,11 +102,11 @@ NanoCode 的定位是终端里的轻量编程 Agent。它支持 Anthropic 和 Op
 理想方向是上层组合下层，下层不反向感知上层：
 
 ```text
-agent/harness/  -> agent/
+agent/runtime_management/  -> agent/
 providers/      -> agent/types.py + agent/models.py
-cli/session.py  -> agent/ + agent/harness/ + providers/ + cli/core/
+cli/session.py  -> agent/ + agent/runtime_management/ + providers/ + cli/core/
 tui/            -> cli/session.py / cli/thread.py，以及少量 cli/core skills/memory 辅助
-cli/core/tools/ -> agent/types.py + agent/harness permissions/hooks/persistence
+cli/core/tools/ -> agent/types.py + agent/runtime_management permissions/hooks/persistence
 ```
 
 需要注意几个实际边界：
@@ -112,8 +114,9 @@ cli/core/tools/ -> agent/types.py + agent/harness permissions/hooks/persistence
 - `Agent` 暴露回调槽位，`AgentSession` 在运行时填入 extension runner、tool runtime、MCP 初始化、shutdown 和动态附件准备逻辑。
 - `AgentLoop` 不 import `ToolRuntime`，只调用 `execute_tools(calls)` 回调。
 - `Compressor` 不 import provider；摘要调用由 `AgentSession._summarize_messages()` 注入。
+- `providers/` 是 Application Layer 使用的模型 adapter 包。它物理上独立，是为了不让 provider SDK 差异扩散到 Agent Core。
 - `cli/core/server/` 虽然位于 `cli/core` 下，但它是 headless adapter，会通过 `cli/thread.py` 创建和提交 runtime thread。
-- `cli/session.py` 和 `cli/thread.py` 为 CLI/TUI 渲染做了少量懒加载 `tui.renderer`，但这个依赖停留在应用表现层，不进入 Agent core 或 harness。
+- `cli/session.py` 和 `cli/thread.py` 为 CLI/TUI 渲染做了少量懒加载 `tui.renderer`，但这个依赖停留在 Application Layer，不进入 Agent Core 或 Runtime Management。
 
 配置对象也按层拆分：
 
@@ -138,7 +141,7 @@ src/
 │   ├── types.py                  # Conversation、ToolCall、ToolResult、RuntimeEvent
 │   ├── models.py                 # 模型窗口、thinking、重试和工具 schema helper
 │   ├── budget.py                 # token/cost 估算
-│   └── harness/
+│   └── runtime_management/       # Runtime Management：上下文、权限、hooks、持久化、恢复
 │       ├── __init__.py
 │       ├── approvals.py
 │       ├── compressor.py
@@ -291,7 +294,7 @@ src/
 | 模块 | 职责 | 关键边界 |
 |------|------|---------|
 | `agent/` | Agent 状态、LLM/tool 循环、事件、核心类型、模型元数据和费用估算 | 不持有具体能力，不 import 应用层 |
-| `agent/harness/` | 压缩、上下文构建、会话持久化、权限、approvals、hooks | 可以 I/O，不依赖表现层和 provider |
+| `agent/runtime_management/` | 压缩、上下文构建、会话持久化、权限、approvals、hooks | 可以 I/O，不依赖表现层和 provider |
 | `providers/` | Anthropic/OpenAI-compatible 调用、流式解析、统一返回 `BackendResponse` | 只依赖 core types 和 provider-neutral model helper |
 | `cli/session.py` | 创建并连接所有运行对象 | 唯一总装配点 |
 | `cli/core/tools/` | 工具 schema、注册、执行管线、deferred 激活、recent files | ToolRuntime 由 Session 创建 |
@@ -310,10 +313,10 @@ src/
 | 模块 | 关键对象 | 主要输入 | 主要输出 | 常见修改原因 |
 |------|----------|----------|----------|--------------|
 | `agent/` | `Agent`、`AgentLoop`、`RuntimeEvent` | 用户消息、provider response、tool results | canonical conversation、runtime events | 改主循环、预算、事件协议、核心状态 |
-| `agent/harness/context` | prompt bundle、startup context、attachments | workspace、project instructions、Git 状态 | system prompt 和 user context | 改系统提示词、AGENTS/rules 读取、动态附件 |
-| `agent/harness/compressor.py` | `Compressor`、`MessageView` | conversation、token 压力、summary callable | snipped/compacted conversation | 改上下文治理、compact 策略、post-compact 恢复 |
-| `agent/harness/permissions` | `PermissionDecision`、path/rule/shell policy | tool name、tool input、mode、metadata | allow/deny/confirm | 改安全策略、权限模式、settings rule |
-| `agent/harness/persistence` | `SessionLog`、`RunStore`、`ArtifactStore` | RuntimeEvent、ConversationHistory、ToolResult | session log、trace、report、artifact | 改 resume、评测观测、artifact schema |
+| `agent/runtime_management/context` | prompt bundle、startup context、attachments | workspace、project instructions、Git 状态 | system prompt 和 user context | 改系统提示词、AGENTS/rules 读取、动态附件 |
+| `agent/runtime_management/compressor.py` | `Compressor`、`MessageView` | conversation、token 压力、summary callable | snipped/compacted conversation | 改上下文治理、compact 策略、post-compact 恢复 |
+| `agent/runtime_management/permissions` | `PermissionDecision`、path/rule/shell policy | tool name、tool input、mode、metadata | allow/deny/confirm | 改安全策略、权限模式、settings rule |
+| `agent/runtime_management/persistence` | `SessionLog`、`RunStore`、`ArtifactStore` | RuntimeEvent、ConversationHistory、ToolResult | session log、trace、report、artifact | 改 resume、评测观测、artifact schema |
 | `providers/` | `Backend`、`BackendResponse`、`TokenUsage` | canonical conversation、tools、system prompt | text、tool calls、usage | 接新模型厂商、修 streaming/tool call 解析 |
 | `cli/session.py` | `AgentSession` | `RuntimeConfig`、prompt、callbacks | event stream、run artifacts、conversation commits | 改装配、跨模块桥接、生命周期 |
 | `cli/core/tools` | `ToolRegistry`、`ToolRuntime`、`ToolContext` | model tool calls、tool definitions | `ToolResult`、tool events | 新增工具、改执行管线、deferred/allowlist |
@@ -354,7 +357,7 @@ Hook 和 Extension 不是替代关系。
 
 | 维度 | Hook | Extension |
 |------|------|-----------|
-| 位置 | `agent/harness/hooks/` | `cli/core/extensions/` |
+| 位置 | `agent/runtime_management/hooks/` | `cli/core/extensions/` |
 | 形式 | 外部进程，JSON stdin/stdout | 进程内 Python `.py` |
 | 适合 | deny/allow/modify/append_context 这类简单拦截 | 注册工具、注册命令、订阅事件 |
 | 装配 | AgentSession 创建 HookManager | AgentSession 加载 ExtensionRunner |
@@ -368,10 +371,10 @@ Hook 和 Extension 不是替代关系。
 3. agent/loop.py                  # 看主循环如何只依赖注入回调
 4. providers/anthropic.py         # 看模型响应如何统一成 BackendResponse
 5. cli/core/tools/runtime.py      # 看工具执行管线
-6. agent/harness/permissions/     # 看权限如何分层判断
-7. agent/harness/compressor.py    # 看上下文治理
-8. agent/harness/context/builder.py
-9. agent/harness/persistence/     # 看 session/run/artifact 如何审计和恢复
+6. agent/runtime_management/permissions/     # 看权限如何分层判断
+7. agent/runtime_management/compressor.py    # 看上下文治理
+8. agent/runtime_management/context/builder.py
+9. agent/runtime_management/persistence/     # 看 session/run/artifact 如何审计和恢复
 ```
 
 按问题类型阅读会更快：
@@ -379,9 +382,9 @@ Hook 和 Extension 不是替代关系。
 | 任务 | 建议入口 |
 |------|----------|
 | 新增一个内置工具 | `cli/core/tools/builtin.py` → `registry.py` → `runtime.py` → `04-permissions.md` |
-| 修复工具被错误允许/拒绝 | `cli/core/tools/runtime.py` → `agent/harness/permissions/` → `benchmarks/local-fixture` security/permissions case |
-| 修复上下文爆炸或 compact 后丢信息 | `agent/harness/compressor.py` → `cli/session.py::_build_post_compact_context` → `11-context.md` |
-| 修复 resume 问题 | `agent/harness/persistence/session_log.py` → `session_store.py` → `cli/session.py::restore_from_persistence` |
+| 修复工具被错误允许/拒绝 | `cli/core/tools/runtime.py` → `agent/runtime_management/permissions/` → `benchmarks/local-fixture` security/permissions case |
+| 修复上下文爆炸或 compact 后丢信息 | `agent/runtime_management/compressor.py` → `cli/session.py::_build_post_compact_context` → `11-context.md` |
+| 修复 resume 问题 | `agent/runtime_management/persistence/session_log.py` → `session_store.py` → `cli/session.py::restore_from_persistence` |
 | 接入新 provider | `providers/base.py` → 现有 provider → `agent/models.py` → `02-backend.md` |
 | 排查 Benchmark 失败 | 先看 `.nanocode/runs/<run-id>/report.json`，再看 `trace.jsonl`，最后对照对应 fixture verifier |
 | 审查安全边界 | `04-permissions.md` 和 `05-sandbox.md` 一起看；权限决定能否尝试，sandbox 决定 shell 尝试时碰哪里 |

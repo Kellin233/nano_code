@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from ....agent.harness.persistence.atomic import write_bytes_atomic, write_text_atomic
+from ....agent.runtime_management.persistence.atomic import write_bytes_atomic, write_text_atomic
 from .types import McpCallResult
 
 TEXT_BLOCK_LIMIT = 50 * 1024

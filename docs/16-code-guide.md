@@ -11,8 +11,8 @@
 4. agent/loop.py
 5. providers/anthropic.py
 6. cli/core/tools/runtime.py
-7. agent/harness/compressor.py
-8. agent/harness/context/builder.py
+7. agent/runtime_management/compressor.py
+8. agent/runtime_management/context/builder.py
 ```
 
 只读 3 个文件理解主路径：
@@ -36,10 +36,10 @@ cli/core/tools/runtime.py
 | `providers/openai.py` | OpenAI-compatible 流式解析和 function call 转换 |
 | `cli/core/tools/runtime.py` | 工具执行管线 |
 | `cli/core/tools/registry.py` | ToolRegistry、deferred、MCP/extension 工具注册 |
-| `agent/harness/compressor.py` | 三层上下文治理中的 Tool History Snip 和 Context Compact |
-| `agent/harness/context/sources.py` | AGENTS.md、.nanocode/rules、Git 快照、frontmatter |
-| `agent/harness/persistence/session_log.py` | session.jsonl checkpoint/resume |
-| `agent/harness/persistence/run_store.py` | run trace/report 持久化 |
+| `agent/runtime_management/compressor.py` | 三层上下文治理中的 Tool History Snip 和 Context Compact |
+| `agent/runtime_management/context/sources.py` | AGENTS.md、.nanocode/rules、Git 快照、frontmatter |
+| `agent/runtime_management/persistence/session_log.py` | session.jsonl checkpoint/resume |
+| `agent/runtime_management/persistence/run_store.py` | run trace/report 持久化 |
 | `cli/core/extensions/runner.py` | Extension 事件分发和错误隔离 |
 
 ## 3. 常见修改路径
@@ -51,12 +51,12 @@ cli/core/tools/runtime.py
 | 加模型厂商 | `providers/<name>.py` + `providers/__init__.py` + `agent/models.py` |
 | 改主循环 | `agent/loop.py`，尽量通过注入回调保持 core 纯净 |
 | 改装配关系 | `cli/session.py` |
-| 改权限规则 | `agent/harness/permissions/` |
+| 改权限规则 | `agent/runtime_management/permissions/` |
 | 改 sandbox profile | `cli/core/sandbox/config.py` / `types.py` |
-| 改上下文模板 | `agent/harness/context/builder.py` |
-| 改压缩策略 | `agent/harness/compressor.py` |
-| 改 checkpoint/resume | `agent/harness/persistence/session_log.py` + `cli/session.py` |
-| 改 run artifacts / benchmark report | `agent/harness/persistence/run_store.py`、`report.py`、`benchmarks/local-fixture/run.py` |
+| 改上下文模板 | `agent/runtime_management/context/builder.py` |
+| 改压缩策略 | `agent/runtime_management/compressor.py` |
+| 改 checkpoint/resume | `agent/runtime_management/persistence/session_log.py` + `cli/session.py` |
+| 改 run artifacts / benchmark report | `agent/runtime_management/persistence/run_store.py`、`report.py`、`benchmarks/local-fixture/run.py` |
 | 改 TUI 命令 | `tui/commands.py` / `tui/app.py` |
 | 改 server protocol | `cli/core/protocol/messages.py` / `cli/core/server/app_server.py` |
 
@@ -75,7 +75,7 @@ cli/core/tools/runtime.py
 ## 5. 不要破坏的边界
 
 - 不要让 `agent/` import `cli/`、`tui/`、`providers/`、SDK 或 `cli/core/`。
-- 不要让 `agent/harness/` import `cli/`、`tui/`、`providers/`。
+- 不要让 `agent/runtime_management/` import `cli/`、`tui/`、`providers/`。
 - 不要在 `providers/` 中接触 AgentSession 或 TUI。
 - 不要在 `agent/loop.py` 里直接创建 ToolRuntime。
 - 新能力优先放到 `cli/core/`，由 `cli/session.py` 装配。

@@ -16,7 +16,7 @@ test/tui/
 这些目录名不完全等于当前源码包名，但测试 import 已迁移到新架构路径，例如：
 
 - `nanocode.agent.*`
-- `nanocode.agent.harness.*`
+- `nanocode.agent.runtime_management.*`
 - `nanocode.providers.*`
 - `nanocode.cli.core.*`
 - `nanocode.cli.session`
@@ -56,9 +56,9 @@ nanocode --help
 | 层 | 测什么 |
 |----|--------|
 | Agent core | Agent 状态、消息格式、预算、AgentLoop 状态机、RuntimeEvent |
-| Harness | Compressor、context builder、hooks、permissions、persistence/session log/run store |
+| Runtime Management | Compressor、context builder、hooks、permissions、persistence/session log/run store |
 | Providers | BackendResponse、流式解析、schema 转换、thinking mode |
-| cli/core | tools、sandbox、skills、memory、MCP、subagents、extensions |
+| Application Layer | provider 接入、tools、sandbox、skills、memory、MCP、subagents、extensions、session 装配 |
 | CLI/TUI/Server | 参数解析、REPL 命令、事件渲染、protocol |
 
 ## 4. Mock 策略
@@ -79,16 +79,16 @@ nanocode --help
 rg -n "from .*cli|from .*tui|from .*providers|import anthropic|import openai|open\(" \
   src/agent/agent.py src/agent/loop.py src/agent/events.py src/agent/types.py src/agent/models.py src/agent/budget.py
 
-rg -n "from .*cli|from .*tui|from .*providers" src/agent/harness -g '*.py'
+rg -n "from .*cli|from .*tui|from .*providers" src/agent/runtime_management -g '*.py'
 ```
 
-第一条用于确保 Agent core 没有反向依赖或 SDK import。第二条用于确保 harness 不依赖表现层和 provider。
+第一条用于确保 Agent Core 没有反向依赖或 SDK import。第二条用于确保 Runtime Management 不依赖表现层和 provider。
 
 ## 6. 新增测试 Checklist
 
 - 改 `agent/`：优先补 `test/runtime` 中 Agent/Loop 相关测试。
-- 改 `agent/harness/context`：补 `test/context`。
-- 改 `agent/harness/permissions/hooks/compressor`：补对应 runtime/capabilities 历史目录测试。
+- 改 `agent/runtime_management/context`：补 `test/context`。
+- 改 `agent/runtime_management/permissions/hooks/compressor`：补对应 runtime/capabilities 历史目录测试。
 - 改 `providers/`：补 `test/backend`。
 - 改 `cli/core/tools`：补 `test/capabilities/test_tools*`。
 - 改 `cli/session.py`：补集成测试，验证装配和回调桥接。

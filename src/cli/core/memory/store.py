@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from ....agent.harness.persistence.atomic import write_text_atomic
+from ....agent.runtime_management.persistence.atomic import write_text_atomic
 from .paths import get_memory_dir as _get_memory_dir
 from .types import (
     INDEX_FILENAME,

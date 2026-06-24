@@ -63,7 +63,7 @@ ExtensionRunner 支持事件订阅：
 
 | 维度 | Hook | Extension |
 |------|------|-----------|
-| 位置 | `agent/harness/hooks/` | `cli/core/extensions/` |
+| 位置 | `agent/runtime_management/hooks/` | `cli/core/extensions/` |
 | 运行方式 | 外部进程 | 进程内 Python |
 | 主要能力 | deny/allow/modify/append_context | 注册工具、命令、事件订阅 |
 | 安全模型 | 用户配置命令，项目 hooks 默认不信任 | 代码直接运行，必须信任扩展 |
@@ -104,7 +104,7 @@ Extension handler 抛异常时，`ExtensionRunner` 会记录到 `runner.errors`�
 
 ### 为什么 Extension 在 cli/core
 
-Extension 是“Agent 能做什么”的扩展面，属于应用层能力市场，不属于 core 或 harness。
+Extension 是“Agent 能做什么”的扩展面，属于应用层能力市场，不属于 core 或 Runtime Management。
 
 ### 为什么通过 AgentSession 桥接
 

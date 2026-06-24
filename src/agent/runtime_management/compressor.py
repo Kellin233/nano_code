@@ -6,7 +6,7 @@ NanoCode uses three context layers:
   Level 3. Context Compact    — old conversation is summarized while recent context is kept verbatim
 
 Level 1 runs in ToolRuntime. This module implements Levels 2 and 3. It belongs
-to harness: it may mutate conversation history and call injected callbacks, but
+to Runtime Management: it may mutate conversation history and call injected callbacks, but
 it does not import providers, cli, tui, memory, skills, or MCP modules.
 """
 

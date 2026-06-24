@@ -14,16 +14,16 @@ from pathlib import Path
 from ..agent.agent import Agent, format_agent_results
 from ..agent.budget import estimate_model_cost_usd
 from ..agent.events import RuntimeEvent
-from ..agent.harness.compressor import COMPACT_SUMMARY_MAX_TOKENS, Compressor
-from ..agent.harness.context.builder import (
+from ..agent.runtime_management.compressor import COMPACT_SUMMARY_MAX_TOKENS, Compressor
+from ..agent.runtime_management.context.builder import (
     build_prompt_bundle,
     build_stable_system_prompt,
     render_deferred_tools_attachment,
     render_mcp_delta_attachment,
     render_skill_listing_attachment,
 )
-from ..agent.harness.hooks import HookInput, HookManager
-from ..agent.harness.persistence import (
+from ..agent.runtime_management.hooks import HookInput, HookManager
+from ..agent.runtime_management.persistence import (
     STATUS_FAILED,
     STATUS_STOPPED,
     STOP_REASON_ABORTED,

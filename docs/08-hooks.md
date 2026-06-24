@@ -4,12 +4,12 @@
 
 Hooks 给用户一个外部进程级的拦截面：提交 prompt 前可以修改，工具执行前可以 deny 或改参数，工具执行后可以追加上下文，模型停止时可以要求继续。
 
-Hooks 位于 `agent/harness/hooks/`，因为它们是运行框架的横切机制。它们不是 Extension，也不注册新工具。
+Hooks 位于 `agent/runtime_management/hooks/`，因为它们是运行框架的横切机制。它们不是 Extension，也不注册新工具。
 
 ## 2. 文件结构
 
 ```
-agent/harness/hooks/
+agent/runtime_management/hooks/
 ├── __init__.py
 ├── types.py      # HookInput、HookOutput、HookCommand、HookEventName
 ├── config.py     # HookManager：加载配置、事件匹配、调度
@@ -112,7 +112,7 @@ hook 失败策略由单条 hook 的 `fail_closed` 控制：
 
 | 维度 | Hook | Extension |
 |------|------|-----------|
-| 位置 | `agent/harness/hooks/` | `cli/core/extensions/` |
+| 位置 | `agent/runtime_management/hooks/` | `cli/core/extensions/` |
 | 形式 | 外部进程 | 进程内 Python |
 | 典型用途 | 拦截、修改、拒绝、追加上下文 | 注册工具、注册命令、订阅事件 |
 | 是否扩展工具 | 否 | 是 |
@@ -121,7 +121,7 @@ Hook 的安全优势是隔离：外部命令只能通过 JSON 输入输出影响
 
 ## 9. 设计决策
 
-### 为什么 hooks 放在 harness
+### 为什么 hooks 放在 Runtime Management
 
 Hooks 拦截用户 prompt、工具调用、停止和 compact，是运行框架的横切机制。它们不属于某个具体工具，也不应该让 Agent core 感知外部脚本。
 
@@ -155,9 +155,9 @@ RuntimeEvent 是给 UI、server 和 trace/report 消费的观测流；HookOutput
 ## 11. 代码导读
 
 ```
-agent/harness/hooks/types.py
-agent/harness/hooks/config.py
-agent/harness/hooks/runner.py
+agent/runtime_management/hooks/types.py
+agent/runtime_management/hooks/config.py
+agent/runtime_management/hooks/runner.py
 cli/session.py::_apply_user_prompt_hooks
 cli/session.py::_run_stop_hook
 cli/core/tools/runtime.py

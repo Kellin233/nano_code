@@ -7,7 +7,7 @@ import uuid
 from collections.abc import AsyncIterator
 
 from ..agent.events import RuntimeEvent, TurnResult
-from ..agent.harness.approvals import ApprovalManager, ApprovalRequest, ConfirmFn
+from ..agent.runtime_management.approvals import ApprovalManager, ApprovalRequest, ConfirmFn
 from ..tui.renderer import get_renderer
 from .config import RuntimeConfig
 from .session import create_session

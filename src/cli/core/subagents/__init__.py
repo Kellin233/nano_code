@@ -10,7 +10,7 @@ from __future__ import annotations
 import copy
 from pathlib import Path
 
-from ....agent.harness.context.sources import parse_frontmatter
+from ....agent.runtime_management.context.sources import parse_frontmatter
 from ..tools.builtin import builtin_tool_definitions
 
 # ─── 只读工具（供探索和规划智能体使用）──────────

@@ -8,8 +8,8 @@ from collections.abc import Awaitable, Callable, Collection
 from pathlib import Path
 from typing import Any
 
-from ....agent.harness.hooks import HookInput, HookManager
-from ....agent.harness.permissions import check_permission, check_tool_allowlist
+from ....agent.runtime_management.hooks import HookInput, HookManager
+from ....agent.runtime_management.permissions import check_permission, check_tool_allowlist
 from .builtin import edit_file, grep_search, list_files, read_file, web_fetch, write_file
 from .registry import ToolRegistry
 from .types import (

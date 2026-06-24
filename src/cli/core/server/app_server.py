@@ -6,8 +6,8 @@ import os
 from collections.abc import AsyncIterator
 from typing import Any
 
-from ....agent.harness.approvals import ApprovalDecision
-from ....agent.harness.persistence import list_sessions
+from ....agent.runtime_management.approvals import ApprovalDecision
+from ....agent.runtime_management.persistence import list_sessions
 from ....agent.models import DEFAULT_MODEL
 from ...config import RuntimeConfig
 from ...thread import RuntimeThread

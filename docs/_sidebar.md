@@ -1,8 +1,8 @@
 * [引言](00-introduction.md)
-  * 架构原则、四层依赖、请求流
+  * 架构原则、三层依赖、请求流
 
-* [1. Agent Core 与 Harness](01-runtime.md)
-  * Agent 纯内核、AgentLoop、harness、AgentSession 边界
+* [1. Agent Core、Runtime Management 与 Application](01-runtime.md)
+  * Agent 纯内核、运行过程管理、应用能力装配边界
 
 * [2. Providers 模型后端](02-backend.md)
   * Backend 接口、Anthropic/OpenAI 策略类

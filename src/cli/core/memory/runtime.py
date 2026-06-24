@@ -5,7 +5,7 @@ from __future__ import annotations
 import time
 from pathlib import Path
 
-from ....agent.harness.context.builder import SYSTEM_PROMPT_DYNAMIC_BOUNDARY, render_system_reminder
+from ....agent.runtime_management.context.builder import SYSTEM_PROMPT_DYNAMIC_BOUNDARY, render_system_reminder
 from .store import (
     append_memory,
     get_memory_dir,

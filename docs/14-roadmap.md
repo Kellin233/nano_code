@@ -14,7 +14,7 @@
 
 6. **Prompt cache 策略仍可加强**：工具定义排序、deferred 工具稳定性、动态附件边界还可以继续优化。
 
-7. **测试目录名仍沿用历史口径**：`test/runtime`、`test/capabilities` 等目录名保留历史分层名，但当前测试 import 已经指向 `nanocode.agent.*`、`nanocode.agent.harness.*`、`nanocode.cli.core.*` 等新包路径。
+7. **测试目录名仍沿用历史口径**：`test/runtime`、`test/capabilities` 等目录名保留历史分层名，但当前测试 import 已经指向 `nanocode.agent.*`、`nanocode.agent.runtime_management.*`、`nanocode.cli.core.*` 等新包路径。
 
 ## Roadmap
 

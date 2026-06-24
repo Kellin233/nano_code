@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from ....agent.harness.context.builder import render_system_reminder
+from ....agent.runtime_management.context.builder import render_system_reminder
 
 TRACKED_FILE_TOOLS = {"read_file", "write_file", "edit_file"}
 

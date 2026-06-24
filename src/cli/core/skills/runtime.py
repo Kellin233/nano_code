@@ -16,7 +16,7 @@ import shlex
 import time
 from pathlib import Path
 
-from ....agent.harness.context.sources import parse_frontmatter
+from ....agent.runtime_management.context.sources import parse_frontmatter
 from .registry import SkillRegistry, get_default_registry
 from .types import ActiveSkill, SkillDefinition, SkillInvocationResult
 

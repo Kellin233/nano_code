@@ -2,7 +2,7 @@
 
 `nanocode` 是一个轻量级编程 Agent CLI。它把模型调用、工具执行、权限确认、上下文压缩、TUI 和 headless server 拆成清晰的分层结构，代码位于 `src/`，安装后提供 `nanocode` 命令。
 
-当前架构的核心约束是：Agent core 只管状态机和协议，不持有具体能力；`AgentSession` 是唯一装配点；能力模块全部在应用层组合。
+当前架构的核心约束是：Agent Core 只管状态机和协议，不持有具体能力；`AgentSession` 是唯一装配点；能力模块全部在 Application Layer 组合。
 
 ## 快速开始
 
@@ -104,15 +104,15 @@ nanocode --model gpt-4o "hello"
 
 ```
 src/
-├── agent/                         # Agent core：状态机、协议、事件、核心类型
+├── agent/                         # Agent Core：状态机、协议、事件、核心类型
 │   ├── agent.py                   # Agent 状态容器和回调槽位
 │   ├── loop.py                    # LLM/tool 循环，能力通过回调注入
 │   ├── events.py                  # RuntimeEvent 工厂函数
 │   ├── types.py                   # ToolDef / ToolCall / ToolResult / RuntimeEvent
 │   ├── models.py                  # 模型元数据、schema 转换、retry helper
 │   ├── budget.py                  # 费用估算
-│   └── harness/                   # 运行框架：压缩、上下文、hooks、权限、持久化
-├── providers/                     # LLM Provider 层，只依赖 agent/types.py
+│   └── runtime_management/        # Runtime Management：上下文、权限、hooks、持久化、恢复
+├── providers/                     # Application Layer 使用的 LLM provider adapter
 │   ├── base.py
 │   ├── anthropic.py
 │   └── openai.py
@@ -250,10 +250,10 @@ summary 还会记录 `selected_tasks`、`executed_tasks`、类别通过率、耗
 ## 架构原则
 
 - `agent/` 不 import `cli/`、`tui/`、`providers/`、SDK 或具体能力模块。
-- `agent/harness/` 可以做 I/O，但不依赖 `cli/`、`tui/`、`providers/`。
-- `providers/` 只封装模型厂商差异，不接触 AgentSession 或 TUI。
-- `cli/core/` 是能力层，包含 tools、sandbox、skills、memory、MCP、subagents、server/protocol、extensions。
-- `cli/config.py` 持有应用层 `RuntimeConfig`，并转换为 Agent core 的 `AgentConfig`。
+- `agent/runtime_management/` 可以做 I/O，但不依赖 `cli/`、`tui/`、`providers/`。
+- `providers/` 只封装模型厂商差异，是 Application Layer 使用的 adapter 包，不接触 AgentSession 或 TUI。
+- `cli/core/` 是 Application Layer 的能力模块，包含 tools、sandbox、skills、memory、MCP、subagents、server/protocol、extensions。
+- `cli/config.py` 持有应用层 `RuntimeConfig`，并转换为 Agent Core 的 `AgentConfig`。
 - `cli/session.py` 负责把 Agent、Backend、ToolRuntime、MemoryRuntime、HookManager、ExtensionRunner、persistence 等装配起来。
 
 ## 文档

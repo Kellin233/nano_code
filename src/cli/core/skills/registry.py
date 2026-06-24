@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ....agent.harness.context.sources import parse_frontmatter
+from ....agent.runtime_management.context.sources import parse_frontmatter
 from .types import SkillDefinition
 
 

@@ -1,7 +1,7 @@
 """Provider-neutral agent loop.
 
 The loop owns the LLM/tool state machine, but all capabilities are injected
-by AgentSession. It does not import tools, hooks, harness, cli, tui, or
+by AgentSession. It does not import tools, hooks, Runtime Management, cli, tui, or
 provider implementations.
 """
 

@@ -441,7 +441,7 @@ def _run_context_case(
 ) -> dict[str, Any]:
     from nanocode.agent.agent import Agent, AgentConfig
     from nanocode.agent.budget import estimate_conversation_tokens
-    from nanocode.agent.harness.compressor import Compressor, SNIP_PLACEHOLDER
+    from nanocode.agent.runtime_management.compressor import Compressor, SNIP_PLACEHOLDER
     from nanocode.agent.types import ConversationHistory
 
     raw_history = _build_context_history(
@@ -649,7 +649,7 @@ def _run_budget_tool_result(
     persist: bool,
 ):
     from nanocode.agent.types import ToolCall
-    from nanocode.agent.harness.persistence.artifacts import ArtifactStore
+    from nanocode.agent.runtime_management.persistence.artifacts import ArtifactStore
     from nanocode.cli.core.sandbox.manager import SandboxManager
     from nanocode.cli.core.sandbox.types import SandboxConfig
     from nanocode.cli.core.tools.registry import ToolRegistry
@@ -705,7 +705,7 @@ def _run_budget_tool_result(
 
 def _budget_large_result_via_tool_runtime(*, artifact_root: Path, session_id: str, call_id: str, content: str):
     from nanocode.agent.types import ToolCall
-    from nanocode.agent.harness.persistence.artifacts import ArtifactStore
+    from nanocode.agent.runtime_management.persistence.artifacts import ArtifactStore
     from nanocode.cli.core.tools.registry import ToolRegistry
     from nanocode.cli.core.tools.runtime import ToolRuntime
     from nanocode.cli.core.tools.types import ToolContext
@@ -1859,7 +1859,7 @@ def _recovery_row(root: Path, task_id: str, category: str, variant: str, repetit
 
 
 def _exercise_session_resume_primitive(root: Path, task_id: str, category: str, repetition: int) -> tuple[bool, bool]:
-    from nanocode.agent.harness.persistence.session_log import INTERRUPTED_TOOL_RESULT, SessionLog
+    from nanocode.agent.runtime_management.persistence.session_log import INTERRUPTED_TOOL_RESULT, SessionLog
     from nanocode.agent.types import ConversationHistory, ToolCall, ToolResult
 
     session_id = f"ablation_{task_id}_{repetition}"

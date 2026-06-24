@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ....agent.harness.permissions import check_permission, reset_permission_cache
+from ....agent.runtime_management.permissions import check_permission, reset_permission_cache
 from .builtin import builtin_tool_definitions
 from .registry import ToolRegistry
 from .runtime import ToolRuntime, execute_builtin_tool

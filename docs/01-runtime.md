@@ -1,15 +1,14 @@
-# Agent Core 与 Harness
+# Agent Core、Runtime Management 与 Application
 
-## 1. 为什么拆成 core 和 harness
+## 1. 为什么拆成三层
 
 旧架构把 Agent 状态、工具、MCP、skills、memory、hooks、压缩、backend 调用混在同一条运行时路径里。这样新增能力时容易污染 Agent 内核，循环逻辑也会直接知道工具系统细节。
 
-当前架构把运行时拆成两层：
+当前架构拆成三层：
 
-- `agent/` 是 core，只描述 Agent 状态机和对话协议。
-- `agent/harness/` 是运行框架，处理压缩、上下文、会话、权限、hooks、approvals 这些横切机制。
-
-具体能力不放在这两层，而是由 `cli/session.py` 在应用层装配。
+- **Agent Core**：`agent/`，只描述 Agent 状态机和对话协议。
+- **Runtime Management**：`agent/runtime_management/`，处理压缩、上下文、会话、权限、hooks、approvals 这些运行过程管理能力。
+- **Application Layer**：`cli/session.py`、`cli/core/`、`providers/`、`tui/`，负责 provider、tools、sandbox、MCP、memory、skills、subagents、extensions 和 CLI/TUI/Server 的接入与装配。
 
 ## 2. Agent core
 
@@ -114,12 +113,12 @@ LoopFinished(stop_reason)
 
 事件由 CLI/TUI/Server 消费。core 不知道这些消费端如何渲染。
 
-## 3. Harness
+## 3. Runtime Management
 
-Harness 文件结构：
+Runtime Management 文件结构：
 
 ```
-agent/harness/
+agent/runtime_management/
 ├── __init__.py
 ├── approvals.py              # ApprovalManager
 ├── compressor.py             # Tool History Snip / Context Compact
@@ -147,9 +146,9 @@ agent/harness/
     └── artifacts.py          # 大结果 artifact
 ```
 
-Harness 可以做 I/O，因为它负责“怎么运转”。但它不能依赖 `cli/`、`tui/`、`providers/`。需要模型摘要时，`Compressor` 接收 `summarize_messages` callable；需要 compact 后恢复上下文时，接收 `build_post_compact_context` callable。两个 callable 都由 `AgentSession` 注入。
+Runtime Management 可以做 I/O，因为它负责“怎么运转”。但它不能依赖 `cli/`、`tui/`、`providers/`。需要模型摘要时，`Compressor` 接收 `summarize_messages` callable；需要 compact 后恢复上下文时，接收 `build_post_compact_context` callable。两个 callable 都由 `AgentSession` 注入。
 
-Harness 模块之间的协作关系：
+Runtime Management 模块之间的协作关系：
 
 | 能力 | 入口 | 依赖输入 | 输出 |
 |------|------|----------|------|
@@ -162,9 +161,9 @@ Harness 模块之间的协作关系：
 
 这些能力属于“运行框架”，不是“应用能力”。比如 permissions 不知道 `write_file` 如何写文件，只知道给定 tool metadata 和输入时是否允许尝试。
 
-## 4. AgentSession 的职责
+## 4. Application Layer 与 AgentSession
 
-`cli/session.py` 是唯一装配点。它负责：
+Application Layer 负责把 Agent Core、Runtime Management 和具体应用能力组装成可运行的本地 Code Agent。`cli/session.py` 是唯一装配点，负责：
 
 - 创建 `Agent`。
 - 创建 `Backend`。
@@ -185,7 +184,7 @@ Session 桥接主要靠两类接口：
 | core callback slot | `on_before_tool_call`、`on_after_tool_call`、`on_turn_start` | 把 extension runner 接到 Agent 生命周期和工具生命周期 |
 | injected callable | `_execute_tools`、`_prepare_context_for_provider`、`_summarize_messages`、`_build_post_compact_context` | 让 Loop/Compressor 调用应用能力，但不让下层 import 应用层 |
 
-这也是为什么 `cli/session.py` 看起来比其他文件“杂”：它是唯一允许同时认识 core、harness、provider、tools、memory、MCP、skills、sandbox、extensions 的总装配点。
+这也是为什么 `cli/session.py` 看起来比其他文件“杂”：它是唯一允许同时认识 Agent Core、Runtime Management、provider、tools、memory、MCP、skills、sandbox、extensions 的总装配点。
 
 ## 5. 单次请求链路
 
@@ -246,9 +245,9 @@ AgentSession.run(prompt)
 
 ToolRuntime 需要权限、hooks、sandbox、MCP、extension before/after hook、event callback。这些都是应用层装配细节。Loop 创建 ToolRuntime 会直接依赖 `cli/core/tools`，违反 core 纯净原则。
 
-### 为什么 Compressor 在 harness 而不是 core
+### 为什么 Compressor 在 Runtime Management 而不是 core
 
-压缩需要读写消息历史、运行 PreCompact hook、调用模型摘要，并维护工具结果裁剪策略。它是运行框架机制，不是状态机本身。放在 harness 后，core 仍然只描述对话协议；需要模型摘要和 compact 后恢复上下文时由 `AgentSession` 注入 callable。
+压缩需要读写消息历史、运行 PreCompact hook、调用模型摘要，并维护工具结果裁剪策略。它是运行框架机制，不是状态机本身。放在 Runtime Management 后，core 仍然只描述对话协议；需要模型摘要和 compact 后恢复上下文时由 `AgentSession` 注入 callable。
 
 ## 9. 代码导读
 
@@ -260,9 +259,9 @@ agent/loop.py
 agent/events.py
 agent/types.py
 cli/session.py
-agent/harness/compressor.py
-agent/harness/context/builder.py
-agent/harness/persistence/session_log.py
+agent/runtime_management/compressor.py
+agent/runtime_management/context/builder.py
+agent/runtime_management/persistence/session_log.py
 ```
 
 架构检查：
@@ -271,5 +270,5 @@ agent/harness/persistence/session_log.py
 rg -n "from .*cli|from .*tui|from .*providers|import anthropic|import openai|open\(" \
   src/agent/agent.py src/agent/loop.py src/agent/events.py src/agent/types.py src/agent/models.py src/agent/budget.py
 
-rg -n "from .*cli|from .*tui|from .*providers" src/agent/harness -g '*.py'
+rg -n "from .*cli|from .*tui|from .*providers" src/agent/runtime_management -g '*.py'
 ```
